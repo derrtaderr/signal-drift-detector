@@ -5,9 +5,12 @@ Deterministic and keyless. No network calls. Run:
     python3 tests.py
 """
 
+import io
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import date
@@ -878,6 +881,168 @@ class TestReport(unittest.TestCase):
 
         text = render(RunResult(as_of=AS_OF, verdicts=()))
         self.assertIn("0 VALID", text)
+
+
+class TestCli(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _main(self, args):
+        """Run the CLI in-process, returning (exit_code, stdout, stderr)."""
+        from sdd.cli import main
+
+        out, err = io.StringIO(), io.StringIO()
+        code = main(args, stdout=out, stderr=err)
+        return code, out.getvalue(), err.getvalue()
+
+    BASE = None
+
+    def base_args(self):
+        return [
+            "check",
+            "--state",
+            SAMPLE_STATE,
+            "--evidence",
+            SAMPLE_EVIDENCE,
+            "--as-of",
+            "2026-09-10",
+        ]
+
+    def test_check_prints_a_report_and_exits_zero(self):
+        code, out, err = self._main(self.base_args())
+
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        self.assertIn("Northwind Analytics", out)
+        self.assertIn("INVALIDATED", out)
+
+    def test_json_format_emits_machine_readable_verdicts(self):
+        code, out, _ = self._main(self.base_args() + ["--format", "json"])
+        payload = json.loads(out)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["as_of"], "2026-09-10")
+        self.assertEqual(len(payload["verdicts"]), 5)
+        self.assertEqual(payload["summary"]["INVALIDATED"], 2)
+
+    def test_ranking_only_emits_just_the_eligible_ids(self):
+        code, out, _ = self._main(self.base_args() + ["--ranking-only"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            sorted(out.split()), ["li-9000000002", "li-9000000005"]
+        )
+
+    def test_without_an_evidence_file_the_hire_check_cannot_run(self):
+        """Fail closed: no evidence means SUSPECT everywhere, never VALID."""
+        args = [
+            "check",
+            "--state",
+            SAMPLE_STATE,
+            "--as-of",
+            "2026-09-10",
+            "--format",
+            "json",
+        ]
+        code, out, _ = self._main(args)
+        payload = json.loads(out)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["summary"]["VALID"], 0)
+
+    def test_a_malformed_state_file_exits_nonzero_with_a_message_not_a_traceback(self):
+        bad = os.path.join(self.tmp, "state.json")
+        with open(bad, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+
+        code, out, err = self._main(["check", "--state", bad])
+
+        self.assertEqual(code, 2)
+        self.assertIn("not valid JSON", err)
+        self.assertNotIn("Traceback", err)
+
+    def test_the_ledger_is_written_when_a_path_is_given(self):
+        ledger_path = os.path.join(self.tmp, "ledger.json")
+        code, _, _ = self._main(self.base_args() + ["--ledger", ledger_path])
+
+        self.assertEqual(code, 0)
+        with open(ledger_path, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual(
+            saved["signals"]["li-9000000001"]["verdict"], "INVALIDATED"
+        )
+        self.assertEqual(
+            saved["signals"]["li-9000000001"]["last_checked"], "2026-09-10"
+        )
+
+    def test_a_second_run_inside_the_interval_carries_verdicts_forward(self):
+        ledger_path = os.path.join(self.tmp, "ledger.json")
+        self._main(self.base_args() + ["--ledger", ledger_path])
+        code, out, _ = self._main(
+            self.base_args() + ["--ledger", ledger_path, "--format", "json"]
+        )
+        payload = json.loads(out)
+
+        self.assertEqual(code, 0)
+        self.assertTrue(all(v["carried_forward"] for v in payload["verdicts"]))
+
+    def test_json_output_can_be_written_to_a_file(self):
+        out_path = os.path.join(self.tmp, "verdicts.json")
+        code, _, _ = self._main(self.base_args() + ["--out", out_path])
+
+        self.assertEqual(code, 0)
+        with open(out_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        self.assertEqual(len(payload["verdicts"]), 5)
+
+
+class TestCleanCloneUsability(unittest.TestCase):
+    """Definition of done: runs from a clean clone with no machine state."""
+
+    def test_runs_as_a_module_from_an_unrelated_working_directory(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "sdd",
+                    "check",
+                    "--state",
+                    SAMPLE_STATE,
+                    "--evidence",
+                    SAMPLE_EVIDENCE,
+                    "--as-of",
+                    "2026-09-10",
+                ],
+                cwd=tmp,
+                env=dict(os.environ, PYTHONPATH=HERE),
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Northwind Analytics", proc.stdout)
+
+    def test_the_repo_contains_no_absolute_path_to_the_authors_machine(self):
+        """A path baked in here is machine state, and the tool must not carry it."""
+        offenders = []
+        for root, dirs, files in os.walk(HERE):
+            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+            for name in files:
+                if not name.endswith((".py", ".json", ".md")):
+                    continue
+                path = os.path.join(root, name)
+                with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                    body = handle.read()
+                if "/Users/derr" in body and name != "tests.py":
+                    offenders.append(path)
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":
