@@ -102,5 +102,62 @@ class TestVacancyAdapterRejectsMalformedInput(unittest.TestCase):
         self.assertIn("li-1", str(ctx.exception))
 
 
+def make_signal(**overrides):
+    """A vacancy_duration signal, aged relative to AS_OF unless overridden."""
+    from sdd.model import Signal
+
+    posted = overrides.pop("date_posted", date(2026, 3, 2))
+    fields = dict(
+        signal_id="li-test",
+        signal_class="vacancy_duration",
+        company="Northwind Analytics",
+        title="GTM Engineer",
+        date_posted=posted,
+        last_seen=date(2026, 9, 9),
+        age_days=(AS_OF - posted).days,
+        url="https://example.invalid/jobs/test",
+    )
+    fields.update(overrides)
+    return Signal(**fields)
+
+
+class TestAgeCeilingFalsifier(unittest.TestCase):
+    """Falsifier: the posting's age is below the point where an unfilled posting
+    is more likely evergreen recruiting than a live vacancy."""
+
+    THRESHOLDS = {"suspect_after_days": 120, "invalidate_after_days": 180}
+
+    def _run(self, signal):
+        from sdd.checks import check_age_ceiling
+        from sdd.checks import CheckContext
+
+        return check_age_ceiling(
+            signal, self.THRESHOLDS, CheckContext(as_of=AS_OF)
+        )
+
+    def test_young_posting_holds(self):
+        from sdd.model import VALID
+
+        result = self._run(make_signal(date_posted=date(2026, 8, 20)))
+        self.assertEqual(result.status, VALID)
+
+    def test_posting_past_the_suspect_threshold_is_suspect(self):
+        from sdd.model import SUSPECT
+
+        result = self._run(make_signal(date_posted=date(2026, 4, 20)))
+        self.assertEqual(result.status, SUSPECT)
+
+    def test_golden_case_192_days_is_invalidated(self):
+        from sdd.model import INVALIDATED
+
+        result = self._run(make_signal(date_posted=date(2026, 3, 2)))
+        self.assertEqual(result.status, INVALIDATED)
+
+    def test_evidence_names_the_age_and_the_threshold_it_crossed(self):
+        result = self._run(make_signal(date_posted=date(2026, 3, 2)))
+        self.assertIn("192", result.evidence)
+        self.assertIn("180", result.evidence)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -8,6 +8,14 @@ class DriftError(Exception):
     """Raised for input the tool cannot proceed on (bad config, bad state file)."""
 
 
+#: A falsifier still holds.
+VALID = "VALID"
+#: A falsifier is degraded, or its check could not run. Fail-closed default.
+SUSPECT = "SUSPECT"
+#: A falsifier has been broken by evidence.
+INVALIDATED = "INVALIDATED"
+
+
 @dataclass(frozen=True)
 class Signal:
     """One signal whose validity can be falsified.
