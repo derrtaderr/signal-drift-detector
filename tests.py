@@ -656,5 +656,77 @@ class TestEngineVerdicts(unittest.TestCase):
         self.assertIn("positioning_drift", verdict.note)
 
 
+class TestScheduleLedger(unittest.TestCase):
+    """The schedule is what makes this a re-check rather than a one-time filter."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "ledger.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_missing_ledger_means_everything_is_due(self):
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.path)
+
+        self.assertIsNone(ledger.entry("li-1"))
+        self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
+    def test_a_signal_checked_today_is_not_due_again(self):
+        from sdd.model import VALID
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.path)
+        ledger.record("li-1", VALID, AS_OF)
+
+        self.assertFalse(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
+    def test_a_signal_checked_past_the_interval_is_due(self):
+        from sdd.model import VALID
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.path)
+        ledger.record("li-1", VALID, date(2026, 9, 2))
+
+        self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
+    def test_a_signal_inside_the_interval_is_not_due(self):
+        from sdd.model import VALID
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.path)
+        ledger.record("li-1", VALID, date(2026, 9, 6))
+
+        self.assertFalse(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
+    def test_the_ledger_round_trips_through_disk(self):
+        from sdd.model import INVALIDATED
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.path)
+        ledger.record("li-9000000001", INVALIDATED, AS_OF)
+        ledger.save()
+
+        reloaded = Ledger.load(self.path)
+        entry = reloaded.entry("li-9000000001")
+
+        self.assertEqual(entry["verdict"], INVALIDATED)
+        self.assertEqual(entry["last_checked"], AS_OF)
+
+    def test_a_corrupt_ledger_is_discarded_so_everything_recheck(self):
+        """A ledger is a cache, never a source of truth. Unreadable means
+        re-check everything, which is the fail-closed direction."""
+        from sdd.schedule import Ledger
+
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+
+        ledger = Ledger.load(self.path)
+
+        self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
