@@ -520,5 +520,141 @@ class TestConfig(unittest.TestCase):
         self.assertIn(missing, str(ctx.exception))
 
 
+def repo_config():
+    from sdd.config import DEFAULT_CONFIG_PATH, load_config
+
+    return load_config(DEFAULT_CONFIG_PATH)
+
+
+def eval_context(evidence=None):
+    from sdd.checks import CheckContext
+    from sdd.evidence import FileEvidenceSource
+
+    config = repo_config()
+    return CheckContext(
+        as_of=AS_OF,
+        evidence=evidence if evidence is not None else FileEvidenceSource(SAMPLE_EVIDENCE),
+        function_map=config.function_map,
+    )
+
+
+class TestEngineVerdicts(unittest.TestCase):
+    """Worst falsifier wins, and nothing reaches VALID by silence."""
+
+    def _evaluate(self, signal, config=None, evidence=None):
+        from sdd.engine import evaluate_signal
+
+        return evaluate_signal(
+            signal, config or repo_config(), eval_context(evidence)
+        )
+
+    def test_golden_case_is_invalidated_with_every_falsifier_recorded(self):
+        from sdd.model import INVALIDATED
+
+        verdict = self._evaluate(
+            make_signal(
+                signal_id="li-9000000001",
+                company="Northwind Analytics",
+                title="GTM Engineer",
+                date_posted=date(2026, 3, 2),
+                last_seen=date(2026, 9, 9),
+            )
+        )
+
+        self.assertEqual(verdict.verdict, INVALIDATED)
+        self.assertEqual(len(verdict.falsifiers), 3)
+        self.assertEqual(verdict.checked_on, AS_OF)
+        self.assertFalse(verdict.ranking_eligible)
+
+    def test_every_falsifier_holding_yields_valid_and_ranking_eligible(self):
+        from sdd.model import VALID
+
+        verdict = self._evaluate(
+            make_signal(
+                signal_id="li-9000000002",
+                company="Cobalt Systems",
+                title="AI Engineer, Platform",
+                date_posted=date(2026, 7, 15),
+                last_seen=date(2026, 9, 9),
+            )
+        )
+
+        self.assertEqual(verdict.verdict, VALID)
+        self.assertTrue(verdict.ranking_eligible)
+
+    def test_one_suspect_among_valids_makes_the_signal_suspect(self):
+        from sdd.model import SUSPECT
+
+        # Peregrine Labs: nobody has looked for hires, so the hire falsifier
+        # cannot run. 143 days also trips the age warning line.
+        verdict = self._evaluate(
+            make_signal(
+                signal_id="li-9000000003",
+                company="Peregrine Labs",
+                title="Revenue Operations Manager",
+                date_posted=date(2026, 4, 20),
+                last_seen=date(2026, 9, 9),
+            )
+        )
+
+        self.assertEqual(verdict.verdict, SUSPECT)
+        self.assertFalse(verdict.ranking_eligible)
+
+    def test_a_verdict_carries_each_falsifier_statement_and_its_evidence(self):
+        verdict = self._evaluate(
+            make_signal(
+                company="Northwind Analytics",
+                title="GTM Engineer",
+                date_posted=date(2026, 3, 2),
+            )
+        )
+        by_name = {f.name: f for f in verdict.falsifiers}
+        hire = by_name["no_hires_since_posting"]
+
+        self.assertIn("No hires have been observed", hire.statement)
+        self.assertIn("2026-06-14", hire.evidence)
+
+    def test_a_check_that_raises_makes_the_signal_suspect_not_valid(self):
+        from sdd.config import Config, Falsifier, SignalClass
+        from sdd.model import SUSPECT
+
+        def exploding_check(signal, thresholds, context):
+            raise RuntimeError("upstream lookup blew up")
+
+        falsifier = Falsifier(
+            name="boom",
+            check_id="boom",
+            check=exploding_check,
+            statement="Something that cannot be checked today.",
+            thresholds={},
+        )
+        config = Config(
+            falsifiers={"boom": falsifier},
+            signal_classes={
+                "vacancy_duration": SignalClass(
+                    name="vacancy_duration",
+                    description="",
+                    recheck_interval_days=7,
+                    falsifiers=(falsifier,),
+                )
+            },
+            function_map={},
+        )
+
+        verdict = self._evaluate(make_signal(), config=config)
+
+        self.assertEqual(verdict.verdict, SUSPECT)
+        self.assertIn("upstream lookup blew up", verdict.falsifiers[0].evidence)
+
+    def test_an_unknown_signal_class_is_suspect_rather_than_a_crash(self):
+        from sdd.model import SUSPECT
+
+        verdict = self._evaluate(make_signal(signal_class="positioning_drift"))
+
+        self.assertEqual(verdict.verdict, SUSPECT)
+        self.assertFalse(verdict.ranking_eligible)
+        self.assertIn("positioning_drift", verdict.note)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

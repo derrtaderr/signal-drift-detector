@@ -15,6 +15,18 @@ SUSPECT = "SUSPECT"
 #: A falsifier has been broken by evidence.
 INVALIDATED = "INVALIDATED"
 
+#: Severity order. Worst wins when a signal's falsifiers disagree.
+_SEVERITY = {VALID: 0, SUSPECT: 1, INVALIDATED: 2}
+
+
+def worst(statuses):
+    """The most severe status in the iterable, VALID if it is empty.
+
+    An empty iterable only reaches here for a signal class with no falsifiers,
+    which config loading already rejects.
+    """
+    return max(statuses, key=lambda s: _SEVERITY.get(s, 1), default=VALID)
+
 
 @dataclass(frozen=True)
 class Signal:
