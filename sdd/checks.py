@@ -146,3 +146,41 @@ def check_no_hires_since_posting(signal, thresholds, context):
             ),
         ),
     )
+
+
+def check_posting_still_listed(signal, thresholds, context):
+    """Falsifier: the posting was still listed on the most recent source scrape.
+
+    A posting that quietly stopped appearing was filled or pulled. Its age in
+    ``state.json`` keeps climbing either way, which is the blindness this
+    falsifier covers.
+    """
+    suspect_after = thresholds.get("suspect_after_days")
+    invalidate_after = thresholds.get("invalidate_after_days")
+    missing_for = (context.as_of - signal.last_seen).days
+
+    if invalidate_after is not None and missing_for >= invalidate_after:
+        return FalsifierResult(
+            INVALIDATED,
+            "not seen on a scrape for %d days, past the %d-day limit"
+            % (missing_for, invalidate_after),
+        )
+    if suspect_after is not None and missing_for >= suspect_after:
+        return FalsifierResult(
+            SUSPECT,
+            "not seen on a scrape for %d days, past the %d-day warning line"
+            % (missing_for, suspect_after),
+        )
+    return FalsifierResult(
+        VALID, "seen on a scrape %d days ago" % missing_for
+    )
+
+
+#: Check implementations, keyed by the ``check`` id a config entry names.
+#: Adding a falsifier means adding an implementation here and an entry in
+#: config.json; a config naming an id absent from this table is a load error.
+CHECKS = {
+    "age_ceiling": check_age_ceiling,
+    "no_hires_since_posting": check_no_hires_since_posting,
+    "posting_still_listed": check_posting_still_listed,
+}

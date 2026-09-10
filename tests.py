@@ -350,5 +350,39 @@ class TestNoHiresSincePostingFalsifier(unittest.TestCase):
         self.assertEqual(result.status, SUSPECT)
 
 
+class TestPostingStillListedFalsifier(unittest.TestCase):
+    """Falsifier: the posting was still listed on the most recent source scrape.
+    A posting that quietly stopped appearing was filled or pulled, and its age
+    keeps climbing in state.json regardless."""
+
+    THRESHOLDS = {"suspect_after_days": 14, "invalidate_after_days": 45}
+
+    def _run(self, last_seen):
+        from sdd.checks import CheckContext, check_posting_still_listed
+
+        return check_posting_still_listed(
+            make_signal(last_seen=last_seen), self.THRESHOLDS, CheckContext(as_of=AS_OF)
+        )
+
+    def test_seen_on_the_latest_scrape_holds(self):
+        from sdd.model import VALID
+
+        self.assertEqual(self._run(date(2026, 9, 9)).status, VALID)
+
+    def test_gone_for_three_weeks_is_suspect(self):
+        from sdd.model import SUSPECT
+
+        self.assertEqual(self._run(date(2026, 8, 20)).status, SUSPECT)
+
+    def test_gone_for_seventy_days_is_invalidated(self):
+        from sdd.model import INVALIDATED
+
+        self.assertEqual(self._run(date(2026, 7, 1)).status, INVALIDATED)
+
+    def test_evidence_names_how_long_it_has_been_missing(self):
+        result = self._run(date(2026, 7, 1))
+        self.assertIn("71", result.evidence)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
