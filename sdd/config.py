@@ -71,11 +71,17 @@ def load_config(path=None):
                 "falsifier %r names check %r, which is not implemented. "
                 "Known checks: %s" % (name, check_id, ", ".join(sorted(CHECKS)))
             )
+        statement = entry.get("statement")
+        if not statement:
+            raise DriftError(
+                "falsifier %r has no statement. A claim nobody can read and "
+                "disagree with is not a falsifier." % name
+            )
         falsifiers[name] = Falsifier(
             name=name,
             check_id=check_id,
             check=CHECKS[check_id],
-            statement=entry.get("statement", ""),
+            statement=statement,
             thresholds=entry.get("thresholds") or {},
         )
 
@@ -90,6 +96,11 @@ def load_config(path=None):
                     % (name, falsifier_name)
                 )
             resolved.append(falsifiers[falsifier_name])
+        if not resolved:
+            raise DriftError(
+                "signal class %r has no falsifiers. An unfalsifiable class would "
+                "pass every run by default." % name
+            )
         signal_classes[name] = SignalClass(
             name=name,
             description=entry.get("description", ""),

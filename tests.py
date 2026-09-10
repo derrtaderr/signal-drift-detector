@@ -470,6 +470,46 @@ class TestConfig(unittest.TestCase):
             load_config(path)
         self.assertIn("ghost", str(ctx.exception))
 
+    def test_a_falsifier_with_no_statement_is_rejected(self):
+        """A claim nobody can read and disagree with is not a falsifier."""
+        from sdd.config import load_config
+        from sdd.model import DriftError
+
+        path = self._write(
+            {
+                "falsifiers": {
+                    "nameless": {"check": "age_ceiling", "thresholds": {}}
+                },
+                "signal_classes": {},
+                "function_map": {},
+            }
+        )
+        with self.assertRaises(DriftError) as ctx:
+            load_config(path)
+        self.assertIn("statement", str(ctx.exception))
+
+    def test_a_signal_class_with_no_falsifiers_is_rejected(self):
+        """An unfalsifiable signal class would pass every run by default, which
+        is the failure mode this whole tool exists to close."""
+        from sdd.config import load_config
+        from sdd.model import DriftError
+
+        path = self._write(
+            {
+                "falsifiers": {},
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": [],
+                    }
+                },
+                "function_map": {},
+            }
+        )
+        with self.assertRaises(DriftError) as ctx:
+            load_config(path)
+        self.assertIn("no falsifiers", str(ctx.exception))
+
     def test_missing_config_file_names_the_path(self):
         from sdd.config import load_config
         from sdd.model import DriftError
