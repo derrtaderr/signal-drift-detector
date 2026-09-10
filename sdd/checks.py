@@ -75,3 +75,74 @@ def check_age_ceiling(signal, thresholds, context):
     return FalsifierResult(
         VALID, "posting is %d days old, inside the evergreen ceiling" % age
     )
+
+
+def check_no_hires_since_posting(signal, thresholds, context):
+    """Falsifier: no hires have been observed into this function at this
+    company since the posting date.
+
+    This is the check that makes the worked case designed rather than lucky. A
+    role open 192 days looks like a capability vacuum right up until you learn
+    the company hired into that exact function three months in, at which point
+    the posting reads as evergreen recruiting and the signal is dead.
+
+    Fails closed in three distinct ways, each reported with its own reason:
+    no evidence source, no observations for the company, or a title that cannot
+    be scoped to a function.
+    """
+    source = context.evidence
+    if source is None:
+        return FalsifierResult(
+            SUSPECT, "no evidence source configured, so the hire check could not run"
+        )
+
+    function = map_function(signal.title, context.function_map)
+    if function is None:
+        return FalsifierResult(
+            SUSPECT,
+            "title %r does not map to a known function, so hires cannot be "
+            "scoped to it" % signal.title,
+        )
+
+    record = source.observations(signal.company)
+    if record is None:
+        return FalsifierResult(
+            SUSPECT,
+            "no hire observations on record for %s, so nobody has looked"
+            % signal.company,
+        )
+
+    since = [
+        hire
+        for hire in record.get("hires", [])
+        if hire.get("function") == function and hire.get("date") > signal.date_posted
+    ]
+    if since:
+        hire = min(since, key=lambda h: h["date"])
+        return FalsifierResult(
+            INVALIDATED,
+            "hire into %s at %s on %s (%s), after the posting went up on %s"
+            % (
+                function,
+                signal.company,
+                hire["date"].isoformat(),
+                hire.get("source") or "source unrecorded",
+                signal.date_posted.isoformat(),
+            ),
+        )
+
+    checked_through = record.get("checked_through")
+    return FalsifierResult(
+        VALID,
+        "no hires into %s at %s since %s%s"
+        % (
+            function,
+            signal.company,
+            signal.date_posted.isoformat(),
+            (
+                ", observations current through %s" % checked_through.isoformat()
+                if checked_through
+                else ""
+            ),
+        ),
+    )

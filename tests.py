@@ -233,5 +233,122 @@ class TestFunctionMapping(unittest.TestCase):
         self.assertIsNone(map_function("Warehouse Associate", FUNCTION_MAP))
 
 
+class TestNoHiresSincePostingFalsifier(unittest.TestCase):
+    """Falsifier: no hires have been observed into this function at this company
+    since the posting date. This is the check that would have caught the worked
+    case by design instead of by luck."""
+
+    def _run(self, signal, source=None):
+        from sdd.checks import CheckContext, check_no_hires_since_posting
+        from sdd.evidence import FileEvidenceSource
+
+        context = CheckContext(
+            as_of=AS_OF,
+            evidence=source if source is not None else FileEvidenceSource(SAMPLE_EVIDENCE),
+            function_map=FUNCTION_MAP,
+        )
+        return check_no_hires_since_posting(signal, {}, context)
+
+    def test_golden_case_hire_into_the_function_after_posting_invalidates(self):
+        from sdd.model import INVALIDATED
+
+        result = self._run(
+            make_signal(
+                company="Northwind Analytics",
+                title="GTM Engineer",
+                date_posted=date(2026, 3, 2),
+            )
+        )
+        self.assertEqual(result.status, INVALIDATED)
+
+    def test_invalidated_evidence_names_the_hire_date_and_function(self):
+        result = self._run(
+            make_signal(
+                company="Northwind Analytics",
+                title="GTM Engineer",
+                date_posted=date(2026, 3, 2),
+            )
+        )
+        self.assertIn("2026-06-14", result.evidence)
+        self.assertIn("gtm", result.evidence)
+
+    def test_looked_and_found_no_hires_holds(self):
+        from sdd.model import VALID
+
+        result = self._run(
+            make_signal(
+                company="Cobalt Systems",
+                title="AI Engineer, Platform",
+                date_posted=date(2026, 7, 15),
+            )
+        )
+        self.assertEqual(result.status, VALID)
+
+    def test_company_nobody_looked_at_is_suspect_not_valid(self):
+        from sdd.model import SUSPECT
+
+        result = self._run(
+            make_signal(
+                company="Peregrine Labs",
+                title="Revenue Operations Manager",
+                date_posted=date(2026, 4, 20),
+            )
+        )
+        self.assertEqual(result.status, SUSPECT)
+        self.assertIn("no hire observations", result.evidence)
+
+    def test_a_hire_before_the_posting_date_does_not_falsify_it(self):
+        from sdd.model import VALID
+
+        result = self._run(
+            make_signal(
+                company="Halcyon Freight",
+                title="Machine Learning Engineer",
+                date_posted=date(2026, 8, 20),
+            )
+        )
+        self.assertEqual(result.status, VALID)
+
+    def test_a_hire_into_a_different_function_does_not_falsify_it(self):
+        from sdd.model import VALID
+
+        # Halcyon's only hire is into gtm, dated after this hypothetical
+        # ai_eng posting. Different function, so the posting still stands.
+        result = self._run(
+            make_signal(
+                company="Halcyon Freight",
+                title="Machine Learning Engineer",
+                date_posted=date(2026, 4, 1),
+            )
+        )
+        self.assertEqual(result.status, VALID)
+
+    def test_unmappable_title_cannot_scope_the_check_so_it_is_suspect(self):
+        from sdd.model import SUSPECT
+
+        result = self._run(
+            make_signal(
+                company="Cobalt Systems",
+                title="Warehouse Associate",
+                date_posted=date(2026, 7, 15),
+            )
+        )
+        self.assertEqual(result.status, SUSPECT)
+
+    def test_with_no_evidence_source_every_signal_is_suspect(self):
+        from sdd.evidence import NullEvidenceSource
+        from sdd.model import SUSPECT
+
+        result = self._run(
+            make_signal(
+                company="Cobalt Systems",
+                title="AI Engineer, Platform",
+                date_posted=date(2026, 7, 15),
+            ),
+            source=NullEvidenceSource(),
+        )
+        self.assertEqual(result.status, SUSPECT)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
