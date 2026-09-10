@@ -728,5 +728,115 @@ class TestScheduleLedger(unittest.TestCase):
         self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
 
 
+class TestFullRun(unittest.TestCase):
+    """End to end over the bundled synthetic fixture."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.ledger_path = os.path.join(self.tmp, "ledger.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, ledger=None, force=False):
+        from sdd.adapters import load_vacancy_signals
+        from sdd.engine import run
+
+        signals = load_vacancy_signals(SAMPLE_STATE, as_of=AS_OF)
+        return run(
+            signals,
+            repo_config(),
+            eval_context(),
+            ledger=ledger,
+            force=force,
+        )
+
+    def test_the_fixture_produces_the_expected_spread_of_verdicts(self):
+        from sdd.model import INVALIDATED, SUSPECT, VALID
+
+        result = self._run()
+        verdicts = {v.signal_id: v.verdict for v in result.verdicts}
+
+        self.assertEqual(verdicts["li-9000000001"], INVALIDATED)  # hired into gtm
+        self.assertEqual(verdicts["li-9000000002"], VALID)
+        self.assertEqual(verdicts["li-9000000003"], SUSPECT)  # nobody looked
+        self.assertEqual(verdicts["li-9000000004"], INVALIDATED)  # scrape lost it
+        self.assertEqual(verdicts["li-9000000005"], VALID)
+
+    def test_only_valid_signals_are_ranking_eligible(self):
+        result = self._run()
+        self.assertEqual(
+            sorted(result.eligible_ids), ["li-9000000002", "li-9000000005"]
+        )
+
+    def test_summary_counts_every_verdict(self):
+        from sdd.model import INVALIDATED, SUSPECT, VALID
+
+        result = self._run()
+        self.assertEqual(result.summary[VALID], 2)
+        self.assertEqual(result.summary[SUSPECT], 1)
+        self.assertEqual(result.summary[INVALIDATED], 2)
+
+    def test_a_run_records_what_it_checked_into_the_ledger(self):
+        from sdd.model import INVALIDATED
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.ledger_path)
+        self._run(ledger=ledger)
+        ledger.save()
+
+        reloaded = Ledger.load(self.ledger_path)
+        entry = reloaded.entry("li-9000000001")
+        self.assertEqual(entry["verdict"], INVALIDATED)
+        self.assertEqual(entry["last_checked"], AS_OF)
+
+    def test_a_signal_inside_its_interval_carries_its_verdict_forward(self):
+        from sdd.model import VALID
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.ledger_path)
+        # Claim the golden case was checked two days ago and came back VALID.
+        # Inside the 7-day interval it must be carried, not re-derived.
+        ledger.record("li-9000000001", VALID, date(2026, 9, 8))
+
+        result = self._run(ledger=ledger)
+        golden = [v for v in result.verdicts if v.signal_id == "li-9000000001"][0]
+
+        self.assertEqual(golden.verdict, VALID)
+        self.assertTrue(golden.carried_forward)
+        self.assertEqual(golden.checked_on, date(2026, 9, 8))
+        self.assertEqual(golden.falsifiers, ())
+
+    def test_force_rechecks_a_signal_inside_its_interval(self):
+        from sdd.model import INVALIDATED, VALID
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.ledger_path)
+        ledger.record("li-9000000001", VALID, date(2026, 9, 8))
+
+        result = self._run(ledger=ledger, force=True)
+        golden = [v for v in result.verdicts if v.signal_id == "li-9000000001"][0]
+
+        self.assertEqual(golden.verdict, INVALIDATED)
+        self.assertFalse(golden.carried_forward)
+
+    def test_run_with_no_ledger_checks_everything(self):
+        result = self._run(ledger=None)
+        self.assertTrue(all(not v.carried_forward for v in result.verdicts))
+
+    def test_verdicts_serialize_to_json_safe_dicts(self):
+        result = self._run()
+        payload = result.to_dict()
+
+        text = json.dumps(payload)  # must not raise
+        self.assertIn("li-9000000001", text)
+        self.assertEqual(payload["as_of"], "2026-09-10")
+        golden = [
+            v for v in payload["verdicts"] if v["signal_id"] == "li-9000000001"
+        ][0]
+        self.assertFalse(golden["ranking_eligible"])
+        self.assertEqual(len(golden["falsifiers"]), 3)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

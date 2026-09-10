@@ -14,7 +14,7 @@ signal was trusted by default; it must never repeat that by default itself.
 from dataclasses import dataclass, field
 from datetime import date
 
-from .model import SUSPECT, VALID, worst
+from .model import INVALIDATED, SUSPECT, VALID, worst
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,74 @@ class SignalVerdict:
                 for f in self.falsifiers
             ],
         }
+
+
+@dataclass(frozen=True)
+class RunResult:
+    """Every verdict from one pass, plus the two things a caller acts on."""
+
+    as_of: date
+    verdicts: tuple = ()
+
+    @property
+    def eligible_ids(self):
+        """The signal ids a ranking stage may use. Everything else is held."""
+        return [v.signal_id for v in self.verdicts if v.ranking_eligible]
+
+    @property
+    def summary(self):
+        counts = {VALID: 0, SUSPECT: 0, INVALIDATED: 0}
+        for verdict in self.verdicts:
+            counts[verdict.verdict] = counts.get(verdict.verdict, 0) + 1
+        return counts
+
+    def to_dict(self):
+        return {
+            "as_of": self.as_of.isoformat(),
+            "summary": self.summary,
+            "eligible_ids": self.eligible_ids,
+            "verdicts": [v.to_dict() for v in self.verdicts],
+        }
+
+
+def run(signals, config, context, ledger=None, force=False):
+    """Check every due signal, carry the rest forward, record what was checked.
+
+    A signal inside its class's recheck interval is not re-derived; its stored
+    verdict is carried forward and marked, so a reader can tell a fresh answer
+    from a remembered one.
+    """
+    verdicts = []
+    for signal in signals:
+        signal_class = config.signal_classes.get(signal.signal_class)
+        interval = signal_class.recheck_interval_days if signal_class else 0
+
+        if not force and ledger is not None and not ledger.is_due(
+            signal.signal_id, interval, context.as_of
+        ):
+            entry = ledger.entry(signal.signal_id)
+            verdicts.append(
+                SignalVerdict(
+                    signal_id=signal.signal_id,
+                    signal_class=signal.signal_class,
+                    company=signal.company,
+                    title=signal.title,
+                    age_days=signal.age_days,
+                    verdict=entry["verdict"],
+                    checked_on=entry["last_checked"],
+                    url=signal.url,
+                    note="inside the %d-day recheck interval" % interval,
+                    carried_forward=True,
+                )
+            )
+            continue
+
+        verdict = evaluate_signal(signal, config, context)
+        verdicts.append(verdict)
+        if ledger is not None:
+            ledger.record(signal.signal_id, verdict.verdict, verdict.checked_on)
+
+    return RunResult(as_of=context.as_of, verdicts=tuple(verdicts))
 
 
 def evaluate_signal(signal, config, context):
