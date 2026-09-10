@@ -32,6 +32,23 @@ class FalsifierResult:
     evidence: str
 
 
+def map_function(title, function_map):
+    """Map a posting title to a function slug, or None if it does not map.
+
+    A hire only falsifies a posting if it lands in the SAME function, so this
+    scoping is what keeps `no_hires_since_posting` honest. Returning None rather
+    than guessing is deliberate: an unmappable title means the check cannot be
+    scoped, and the caller must fail closed rather than compare against
+    everything.
+    """
+    haystack = (title or "").lower()
+    for function, keywords in function_map.items():
+        for keyword in keywords:
+            if keyword.lower() in haystack:
+                return function
+    return None
+
+
 def check_age_ceiling(signal, thresholds, context):
     """Falsifier: the posting's age is below the point where an unfilled
     posting is more likely evergreen recruiting than a live vacancy.

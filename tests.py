@@ -202,5 +202,36 @@ class TestEvidenceSources(unittest.TestCase):
         self.assertIsNone(NullEvidenceSource().observations("Northwind Analytics"))
 
 
+FUNCTION_MAP = {
+    "gtm": ["gtm", "go-to-market", "revenue operations", "revops", "growth engineering"],
+    "ai_eng": ["ai engineer", "machine learning", "ml engineer"],
+}
+
+
+class TestFunctionMapping(unittest.TestCase):
+    """A hire only falsifies a posting if it lands in the SAME function. The
+    map is config data, so a new title family is a config edit, not a code edit."""
+
+    def test_maps_a_title_to_its_function(self):
+        from sdd.checks import map_function
+
+        self.assertEqual(map_function("GTM Engineer", FUNCTION_MAP), "gtm")
+
+    def test_matching_is_case_insensitive_and_substring_based(self):
+        from sdd.checks import map_function
+
+        self.assertEqual(
+            map_function("Revenue Operations Manager", FUNCTION_MAP), "gtm"
+        )
+        self.assertEqual(
+            map_function("Machine Learning Engineer", FUNCTION_MAP), "ai_eng"
+        )
+
+    def test_an_unmappable_title_returns_none_rather_than_guessing(self):
+        from sdd.checks import map_function
+
+        self.assertIsNone(map_function("Warehouse Associate", FUNCTION_MAP))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
