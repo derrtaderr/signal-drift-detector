@@ -838,5 +838,47 @@ class TestFullRun(unittest.TestCase):
         self.assertEqual(len(golden["falsifiers"]), 3)
 
 
+class TestReport(unittest.TestCase):
+    """The report is for the human deciding whether to disagree with a verdict,
+    so it has to carry the falsifier statement and the evidence, not just a label."""
+
+    def _report(self):
+        from sdd.adapters import load_vacancy_signals
+        from sdd.engine import run
+        from sdd.report import render
+
+        signals = load_vacancy_signals(SAMPLE_STATE, as_of=AS_OF)
+        return render(run(signals, repo_config(), eval_context()))
+
+    def test_header_carries_the_check_date_and_the_counts(self):
+        text = self._report()
+        self.assertIn("2026-09-10", text)
+        self.assertIn("2 VALID", text)
+        self.assertIn("1 SUSPECT", text)
+        self.assertIn("2 INVALIDATED", text)
+
+    def test_an_invalidated_signal_shows_what_broke_it(self):
+        text = self._report()
+        self.assertIn("Northwind Analytics", text)
+        self.assertIn("192", text)
+        self.assertIn("2026-06-14", text)
+
+    def test_the_falsifier_statement_is_printed_not_just_its_name(self):
+        text = self._report()
+        self.assertIn("No hires have been observed", text)
+
+    def test_a_suspect_signal_says_why_it_could_not_be_confirmed(self):
+        text = self._report()
+        self.assertIn("Peregrine Labs", text)
+        self.assertIn("nobody has looked", text)
+
+    def test_an_empty_run_renders_without_crashing(self):
+        from sdd.engine import RunResult
+        from sdd.report import render
+
+        text = render(RunResult(as_of=AS_OF, verdicts=()))
+        self.assertIn("0 VALID", text)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
