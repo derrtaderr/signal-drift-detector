@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "falsifiers": {
+    "evergreen_age_ceiling": {
+      "check": "age_ceiling",
+      "statement": "The posting's age is below the point where an unfilled posting is more likely evergreen recruiting than a live vacancy.",
+      "thresholds": {
+        "suspect_after_days": 120,
+        "invalidate_after_days": 180
+      }
+    },
+    "no_hires_since_posting": {
+      "check": "no_hires_since_posting",
+      "statement": "No hires have been observed into this function at this company since the posting date.",
+      "thresholds": {}
+    },
+    "posting_still_listed": {
+      "check": "posting_still_listed",
+      "statement": "The posting was still listed on the most recent source scrape.",
+      "thresholds": {
+        "suspect_after_days": 14,
+        "invalidate_after_days": 45
+      }
+    }
+  },
+  "signal_classes": {
+    "vacancy_duration": {
+      "description": "A job posting whose signal strength climbs with age. Recency weighting is structurally blind to reversal here, so every falsifier below has to be re-asked on a schedule.",
+      "recheck_interval_days": 7,
+      "falsifiers": [
+        "evergreen_age_ceiling",
+        "no_hires_since_posting",
+        "posting_still_listed"
+      ]
+    }
+  },
+  "function_map": {
+    "gtm": [
+      "gtm",
+      "go-to-market",
+      "revenue operations",
+      "revops",
+      "growth engineering",
+      "sales engineer",
+      "marketing operations"
+    ],
+    "ai_eng": [
+      "ai engineer",
+      "machine learning",
+      "ml engineer",
+      "applied ai",
+      "llm engineer"
+    ],
+    "data_eng": [
+      "data engineer",
+      "analytics engineer",
+      "data platform"
+    ]
+  }
+}

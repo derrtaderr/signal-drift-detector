@@ -5,6 +5,7 @@ Deterministic and keyless. No network calls. Run:
     python3 tests.py
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -382,6 +383,101 @@ class TestPostingStillListedFalsifier(unittest.TestCase):
     def test_evidence_names_how_long_it_has_been_missing(self):
         result = self._run(date(2026, 7, 1))
         self.assertIn("71", result.evidence)
+
+
+class TestConfig(unittest.TestCase):
+    """The falsifier registry, the schedule and the thresholds are data. Code
+    holds only the check implementations."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write(self, obj):
+        path = os.path.join(self.tmp, "config.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(obj, handle)
+        return path
+
+    def test_repo_config_registers_the_vacancy_duration_class(self):
+        from sdd.config import DEFAULT_CONFIG_PATH, load_config
+
+        config = load_config(DEFAULT_CONFIG_PATH)
+        klass = config.signal_classes["vacancy_duration"]
+
+        self.assertEqual(klass.recheck_interval_days, 7)
+        self.assertEqual(len(klass.falsifiers), 3)
+
+    def test_default_config_path_resolves_without_a_working_directory(self):
+        """A clean clone must find its config no matter where it is run from."""
+        from sdd.config import DEFAULT_CONFIG_PATH
+
+        self.assertTrue(os.path.isabs(DEFAULT_CONFIG_PATH))
+        self.assertTrue(os.path.exists(DEFAULT_CONFIG_PATH))
+
+    def test_each_falsifier_carries_a_statement_thresholds_and_a_callable(self):
+        from sdd.config import DEFAULT_CONFIG_PATH, load_config
+
+        config = load_config(DEFAULT_CONFIG_PATH)
+        falsifier = config.falsifiers["evergreen_age_ceiling"]
+
+        self.assertTrue(callable(falsifier.check))
+        self.assertIn("evergreen", falsifier.statement.lower())
+        self.assertEqual(falsifier.thresholds["invalidate_after_days"], 180)
+
+    def test_repo_config_carries_the_function_map(self):
+        from sdd.config import DEFAULT_CONFIG_PATH, load_config
+
+        config = load_config(DEFAULT_CONFIG_PATH)
+        self.assertIn("gtm", config.function_map)
+
+    def test_a_falsifier_naming_an_unknown_check_is_rejected_at_load(self):
+        from sdd.config import load_config
+        from sdd.model import DriftError
+
+        path = self._write(
+            {
+                "falsifiers": {
+                    "made_up": {"check": "vibes", "statement": "x", "thresholds": {}}
+                },
+                "signal_classes": {},
+                "function_map": {},
+            }
+        )
+        with self.assertRaises(DriftError) as ctx:
+            load_config(path)
+        self.assertIn("vibes", str(ctx.exception))
+
+    def test_a_class_naming_an_undefined_falsifier_is_rejected_at_load(self):
+        from sdd.config import load_config
+        from sdd.model import DriftError
+
+        path = self._write(
+            {
+                "falsifiers": {},
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": ["ghost"],
+                    }
+                },
+                "function_map": {},
+            }
+        )
+        with self.assertRaises(DriftError) as ctx:
+            load_config(path)
+        self.assertIn("ghost", str(ctx.exception))
+
+    def test_missing_config_file_names_the_path(self):
+        from sdd.config import load_config
+        from sdd.model import DriftError
+
+        missing = os.path.join(self.tmp, "nope.json")
+        with self.assertRaises(DriftError) as ctx:
+            load_config(missing)
+        self.assertIn(missing, str(ctx.exception))
 
 
 if __name__ == "__main__":
