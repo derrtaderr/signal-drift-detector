@@ -159,5 +159,48 @@ class TestAgeCeilingFalsifier(unittest.TestCase):
         self.assertIn("180", result.evidence)
 
 
+class TestEvidenceSources(unittest.TestCase):
+    """v1 consumes hire observations, it does not gather them. The source is
+    pluggable so a future adapter can replace the file without touching checks."""
+
+    def test_file_source_returns_observations_for_a_known_company(self):
+        from sdd.evidence import FileEvidenceSource
+
+        source = FileEvidenceSource(SAMPLE_EVIDENCE)
+        record = source.observations("Northwind Analytics")
+
+        self.assertIsNotNone(record)
+        self.assertEqual(len(record["hires"]), 1)
+        self.assertEqual(record["hires"][0]["function"], "gtm")
+        self.assertEqual(record["hires"][0]["date"], date(2026, 6, 14))
+
+    def test_file_source_returns_none_for_a_company_never_looked_at(self):
+        from sdd.evidence import FileEvidenceSource
+
+        source = FileEvidenceSource(SAMPLE_EVIDENCE)
+        self.assertIsNone(source.observations("Peregrine Labs"))
+
+    def test_file_source_distinguishes_looked_and_found_nothing_from_unknown(self):
+        from sdd.evidence import FileEvidenceSource
+
+        source = FileEvidenceSource(SAMPLE_EVIDENCE)
+        record = source.observations("Cobalt Systems")
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record["hires"], [])
+
+    def test_missing_evidence_file_is_a_hard_error_not_a_silent_empty(self):
+        from sdd.evidence import FileEvidenceSource
+        from sdd.model import DriftError
+
+        with self.assertRaises(DriftError):
+            FileEvidenceSource(os.path.join(FIXTURES, "nope.json"))
+
+    def test_null_source_knows_nothing_about_anybody(self):
+        from sdd.evidence import NullEvidenceSource
+
+        self.assertIsNone(NullEvidenceSource().observations("Northwind Analytics"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
