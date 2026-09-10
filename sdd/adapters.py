@@ -39,7 +39,8 @@ def load_vacancy_signals(path, as_of=None):
     for signal_id, record in raw.items():
         if not isinstance(record, dict):
             raise DriftError(
-                "posting %s is not an object, got %s" % (signal_id, type(record).__name__)
+                "posting %s is not an object, got %s"
+                % (signal_id, type(record).__name__)
             )
         for required in ("company", "title", "date_posted"):
             if required not in record:
