@@ -21,9 +21,15 @@ from .model import DriftError, parse_date
 
 
 class NullEvidenceSource:
-    """Knows nothing about anybody. Every check that needs it fails closed."""
+    """Knows nothing about anybody. Every check that needs it fails closed.
+
+    ``configured = False`` is the type-level fact that this stands in for an
+    evidence source the operator never supplied. A check must report that as a
+    missing source, never as a statement about a company.
+    """
 
     name = "none"
+    configured = False
 
     def observations(self, company):
         return None
@@ -41,6 +47,7 @@ class FileEvidenceSource:
     """
 
     name = "file"
+    configured = True
 
     def __init__(self, path):
         self.path = path
@@ -51,6 +58,8 @@ class FileEvidenceSource:
             raise DriftError("evidence file not found: %s" % path)
         except json.JSONDecodeError as exc:
             raise DriftError("evidence file is not valid JSON (%s): %s" % (path, exc))
+        except OSError as exc:
+            raise DriftError("evidence file could not be read (%s): %s" % (path, exc))
 
         companies = raw.get("companies")
         if not isinstance(companies, dict):
@@ -60,11 +69,42 @@ class FileEvidenceSource:
 
         self._companies = {}
         for company, record in companies.items():
+            # A hand-edited evidence file is the normal case, so every shape
+            # below is verified before it is used. Guessing at a null record or
+            # a bare string where an object belongs is how this died with a
+            # stack trace instead of refusing the input.
+            if not isinstance(record, dict):
+                raise DriftError(
+                    "evidence for %s must be an object, got %s"
+                    % (company, type(record).__name__)
+                )
+            raw_hires = record.get("hires", [])
+            if not isinstance(raw_hires, list):
+                raise DriftError(
+                    "hires for %s must be a list, got %s"
+                    % (company, type(raw_hires).__name__)
+                )
             hires = []
-            for hire in record.get("hires", []):
+            for hire in raw_hires:
+                if not isinstance(hire, dict):
+                    raise DriftError(
+                        "hire entry for %s must be an object, got %s"
+                        % (company, type(hire).__name__)
+                    )
+                function = hire.get("function")
+                if not isinstance(function, str) or not function.strip():
+                    # An unscoped hire can never match a function, so it could
+                    # never invalidate anything, and the falsifier would report
+                    # "looked, found nothing" from a file that found a hire.
+                    # Refuse it the same way a bad hire date is refused.
+                    raise DriftError(
+                        "hire entry for %s has a function that is not a "
+                        "non-empty string: %r. An unscoped hire can never "
+                        "falsify a posting." % (company, function)
+                    )
                 hires.append(
                     {
-                        "function": hire.get("function"),
+                        "function": function,
                         "date": parse_date(
                             hire.get("date"), "hire date for %s" % company
                         ),

@@ -108,12 +108,23 @@ def main(argv=None, stdout=None, stderr=None):
         )
         result = run(signals, config, context, ledger=ledger, force=args.force)
 
+        # --out first, ledger last. The ledger is the run's memory, and
+        # overwriting it is the one side effect a later failure cannot undo:
+        # the pre-run baseline is gone and nothing says so. Every write that
+        # can still refuse the run has to happen before the ledger commits.
+        if args.out:
+            try:
+                with open(args.out, "w", encoding="utf-8") as handle:
+                    json.dump(result.to_dict(), handle, indent=2)
+                    handle.write("\n")
+            except OSError as exc:
+                # Refuse before anything reaches stdout. A run that could not
+                # write where it was told must not also look like it succeeded.
+                raise DriftError(
+                    "could not write --out file (%s): %s" % (args.out, exc)
+                )
         if ledger is not None:
             ledger.save()
-        if args.out:
-            with open(args.out, "w", encoding="utf-8") as handle:
-                json.dump(result.to_dict(), handle, indent=2)
-                handle.write("\n")
     except DriftError as exc:
         stderr.write("error: %s\n" % exc)
         return 2

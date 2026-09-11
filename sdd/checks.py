@@ -91,7 +91,10 @@ def check_no_hires_since_posting(signal, thresholds, context):
     be scoped to a function.
     """
     source = context.evidence
-    if source is None:
+    if source is None or not getattr(source, "configured", True):
+        # Either no source at all, or a stand-in for one the operator never
+        # supplied. Both are facts about the run, not about the company, so the
+        # reason must not name a company.
         return FalsifierResult(
             SUSPECT, "no evidence source configured, so the hire check could not run"
         )

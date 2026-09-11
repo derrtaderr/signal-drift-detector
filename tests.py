@@ -288,6 +288,31 @@ class TestNoHiresSincePostingFalsifier(unittest.TestCase):
         )
         self.assertEqual(result.status, VALID)
 
+    def test_a_null_source_reports_no_source_configured_not_nobody_looked(self):
+        """NullEvidenceSource IS "no evidence source configured".
+
+        The CLI always hands the check a source object, so gating the promised
+        message on ``evidence is None`` alone made it unreachable in a real run
+        and blamed the company for a flag the operator forgot.
+        """
+        from sdd.evidence import NullEvidenceSource
+        from sdd.model import SUSPECT
+
+        result = self._run(
+            make_signal(
+                company="Northwind Analytics",
+                title="GTM Engineer",
+                date_posted=date(2026, 3, 2),
+            ),
+            source=NullEvidenceSource(),
+        )
+
+        self.assertEqual(result.status, SUSPECT)
+        self.assertEqual(
+            result.evidence,
+            "no evidence source configured, so the hire check could not run",
+        )
+
     def test_company_nobody_looked_at_is_suspect_not_valid(self):
         from sdd.model import SUSPECT
 
@@ -718,6 +743,45 @@ class TestScheduleLedger(unittest.TestCase):
         self.assertEqual(entry["verdict"], INVALIDATED)
         self.assertEqual(entry["last_checked"], AS_OF)
 
+    def test_an_entry_with_an_unreadable_verdict_is_due(self):
+        """A cached verdict nobody can classify is not a usable cache entry."""
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.path)
+        ledger.record("li-1", None, AS_OF)
+        self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
+        ledger.record("li-2", "PROBABLY_FINE", AS_OF)
+        self.assertTrue(ledger.is_due("li-2", interval_days=7, as_of=AS_OF))
+
+    def test_a_row_missing_its_verdict_is_dropped_on_load(self):
+        from sdd.schedule import Ledger
+
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"signals": {"li-1": {"last_checked": "2026-09-10"}}}, handle
+            )
+
+        ledger = Ledger.load(self.path)
+
+        self.assertIsNone(ledger.entry("li-1"))
+
+    def test_a_ledger_whose_signals_are_not_an_object_is_discarded(self):
+        """Same shape as the other input bugs, but a ledger is a CACHE.
+
+        Unreadable means re-check, which is already the fail-closed direction,
+        so this one is discarded rather than refused. It must not traceback.
+        """
+        from sdd.schedule import Ledger
+
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump({"signals": ["li-1"]}, handle)
+
+        ledger = Ledger.load(self.path)
+
+        self.assertIsNone(ledger.entry("li-1"))
+        self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
     def test_a_corrupt_ledger_is_discarded_so_everything_recheck(self):
         """A ledger is a cache, never a source of truth. Unreadable means
         re-check everything, which is the fail-closed direction."""
@@ -953,6 +1017,130 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["summary"]["VALID"], 0)
 
+        # The reason must blame the missing flag, not the companies. A run with
+        # no evidence source says so on every hire falsifier; it must never
+        # report "nobody has looked", which is a claim about a company.
+        hire_reasons = [
+            f["evidence"]
+            for verdict in payload["verdicts"]
+            for f in verdict["falsifiers"]
+            if f["name"] == "no_hires_since_posting"
+        ]
+        self.assertTrue(hire_reasons)
+        for reason in hire_reasons:
+            self.assertIn(
+                "no evidence source configured, so the hire check could not run",
+                reason,
+            )
+            self.assertNotIn("nobody has looked", reason)
+
+    def test_a_company_absent_from_a_supplied_evidence_file_says_nobody_looked(self):
+        """The two fail-closed reasons must stay distinguishable in output.
+
+        An evidence file WAS configured, so a company missing from it is a
+        statement about that company, not about the operator's flags.
+        """
+        code, out, _ = self._main(self.base_args() + ["--format", "json"])
+        payload = json.loads(out)
+
+        self.assertEqual(code, 0)
+        peregrine = [
+            v for v in payload["verdicts"] if v["company"] == "Peregrine Labs"
+        ][0]
+        hire = [
+            f
+            for f in peregrine["falsifiers"]
+            if f["name"] == "no_hires_since_posting"
+        ][0]
+
+        self.assertEqual(hire["status"], "SUSPECT")
+        self.assertIn(
+            "no hire observations on record for Peregrine Labs, so nobody has looked",
+            hire["evidence"],
+        )
+        self.assertNotIn("no evidence source configured", hire["evidence"])
+
+    def _ledger_with(self, row):
+        """A ledger holding one row for the golden signal, checked today.
+
+        Today means inside the 7-day interval, so an intact row WOULD be
+        carried forward. That is what makes these tests about the verdict's
+        readability rather than about the schedule.
+        """
+        path = os.path.join(self.tmp, "ledger.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "signals": {"li-9000000001": row}}, handle)
+        return path
+
+    def test_a_ledger_row_with_no_verdict_is_re_checked_not_carried_forward(self):
+        """flow.md: a partial ledger is discarded and everything is re-checked.
+
+        A hand-edited row without a verdict used to carry forward as None,
+        match no report section, and vanish from the body while still being
+        counted in the header.
+        """
+        ledger = self._ledger_with({"last_checked": "2026-09-10"})
+
+        code, out, _ = self._main(
+            self.base_args() + ["--format", "json", "--ledger", ledger]
+        )
+        payload = json.loads(out)
+        golden = [
+            v for v in payload["verdicts"] if v["signal_id"] == "li-9000000001"
+        ][0]
+
+        self.assertEqual(code, 0)
+        self.assertFalse(golden["carried_forward"])
+        self.assertEqual(golden["verdict"], "INVALIDATED")
+        self.assertTrue(golden["falsifiers"], "a re-checked signal carries receipts")
+
+    def test_a_ledger_row_with_an_unrecognized_verdict_is_re_checked(self):
+        ledger = self._ledger_with(
+            {"last_checked": "2026-09-10", "verdict": "PROBABLY_FINE"}
+        )
+
+        code, out, _ = self._main(
+            self.base_args() + ["--format", "json", "--ledger", ledger]
+        )
+        payload = json.loads(out)
+        golden = [
+            v for v in payload["verdicts"] if v["signal_id"] == "li-9000000001"
+        ][0]
+
+        self.assertEqual(code, 0)
+        self.assertFalse(golden["carried_forward"])
+        self.assertEqual(golden["verdict"], "INVALIDATED")
+
+    def test_a_re_checked_corrupt_row_is_visible_in_the_report_body(self):
+        """The invariant: nothing counted in the header may be absent below it."""
+        ledger = self._ledger_with({"last_checked": "2026-09-10"})
+
+        code, out, _ = self._main(self.base_args() + ["--ledger", ledger])
+
+        self.assertEqual(code, 0)
+        self.assertIn("li-9000000001", out)
+        self.assertIn("Northwind Analytics", out)
+
+        # Every signal the header counts must appear as a row in the body.
+        header = [line for line in out.splitlines() if "signals checked" in line][0]
+        counted = int(header.split("(")[1].split(" ")[0])
+        body_rows = [
+            line for line in out.splitlines() if line.startswith("  [")
+        ]
+        self.assertEqual(len(body_rows), counted)
+
+    def test_a_corrupt_row_is_healed_in_the_ledger_it_writes_back(self):
+        ledger = self._ledger_with({"last_checked": "2026-09-10"})
+
+        code, _, _ = self._main(self.base_args() + ["--ledger", ledger])
+
+        self.assertEqual(code, 0)
+        with open(ledger, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual(
+            saved["signals"]["li-9000000001"]["verdict"], "INVALIDATED"
+        )
+
     def test_a_malformed_state_file_exits_nonzero_with_a_message_not_a_traceback(self):
         bad = os.path.join(self.tmp, "state.json")
         with open(bad, "w", encoding="utf-8") as handle:
@@ -997,6 +1185,487 @@ class TestCli(unittest.TestCase):
         with open(out_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         self.assertEqual(len(payload["verdicts"]), 5)
+
+
+class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
+    """README promises exit 2 and a one-line message, never a traceback.
+
+    Every case below used to die with a stack trace and exit 1. They are one
+    class of bug, not five: an input the tool reads is a claim about the world,
+    and reading it must never assume a shape it did not verify. Each refusal
+    happens before any verdict is emitted, so the fail-closed direction holds —
+    these are clean refusals, never partial output.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _main(self, args):
+        from sdd.cli import main
+
+        out, err = io.StringIO(), io.StringIO()
+        code = main(args, stdout=out, stderr=err)
+        return code, out.getvalue(), err.getvalue()
+
+    def _write(self, name, obj):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(obj, handle)
+        return path
+
+    def _config(self, **overrides):
+        """A valid config, mutated by keyword for the case under test."""
+        signal_class = {
+            "description": "",
+            "recheck_interval_days": 7,
+            "falsifiers": ["no_hires_since_posting"],
+        }
+        signal_class.update(overrides.pop("signal_class", {}))
+        raw = {
+            "falsifiers": {
+                "no_hires_since_posting": {
+                    "check": "no_hires_since_posting",
+                    "statement": "No hires since the posting date.",
+                    "thresholds": {},
+                }
+            },
+            "signal_classes": {"vacancy_duration": signal_class},
+            "function_map": {"gtm": ["gtm"]},
+        }
+        raw.update(overrides)
+        return self._write("config.json", raw)
+
+    def _state(self, title="Warehouse Associate", company="Northwind Analytics"):
+        return self._write(
+            "state.json",
+            {
+                "li-1": {
+                    "company": company,
+                    "title": title,
+                    "date_posted": "2026-03-02",
+                    "last_seen": "2026-09-09",
+                    "job_url": "https://example.invalid/jobs/1",
+                }
+            },
+        )
+
+    def _assert_refused(self, code, out, err, needle):
+        self.assertEqual(code, 2, "expected exit 2 (refused input), got %r" % code)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("error:", err)
+        self.assertIn(needle, err)
+        self.assertEqual(err.count("\n"), 1, "refusal must be one line: %r" % err)
+        self.assertEqual(out, "", "refused input must emit no verdicts")
+
+    def base_args(self, **kwargs):
+        args = ["check", "--state", SAMPLE_STATE, "--as-of", "2026-09-10"]
+        for flag, value in kwargs.items():
+            args += ["--" + flag.replace("_", "-"), value]
+        return args
+
+    # --- site 1: evidence company record is null -------------------------
+
+    def test_evidence_company_record_of_null_is_refused(self):
+        evidence = self._write("evidence.json", {"companies": {"Northwind": None}})
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "Northwind")
+
+    # --- site 2: a hire entry is not an object ---------------------------
+
+    def test_evidence_hire_entry_that_is_not_an_object_is_refused(self):
+        evidence = self._write(
+            "evidence.json", {"companies": {"Northwind": {"hires": ["2026-06-14"]}}}
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "Northwind")
+
+    def test_hire_with_a_null_function_is_refused(self):
+        """A hire nobody scoped cannot invalidate anything.
+
+        The record says somebody WAS hired, but `function: null` matches no
+        function, so the falsifier reported VALID "looked, found nothing" from
+        a file that plainly found something. The date field already refuses
+        this way; function now does too.
+        """
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "hires": [{"function": None, "date": "2026-06-14"}]
+                    }
+                }
+            },
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "function")
+
+    def test_hire_with_a_non_string_function_is_refused(self):
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "hires": [{"function": 7, "date": "2026-06-14"}]
+                    }
+                }
+            },
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "function")
+
+    def test_hire_with_a_missing_function_is_refused(self):
+        evidence = self._write(
+            "evidence.json",
+            {"companies": {"Northwind Analytics": {"hires": [{"date": "2026-06-14"}]}}},
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "function")
+
+    def test_a_null_function_hire_cannot_be_reported_as_found_nothing(self):
+        """The consequence: the run must not claim the company is clean."""
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "hires": [{"function": None, "date": "2026-06-14"}]
+                    }
+                }
+            },
+        )
+        state = self._state(title="GTM Engineer")
+
+        code, out, err = self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--evidence",
+                evidence,
+                "--as-of",
+                "2026-09-10",
+            ]
+        )
+
+        self._assert_refused(code, out, err, "function")
+        self.assertNotIn("no hires into", out)
+
+    def test_evidence_hires_that_is_not_a_list_is_refused(self):
+        evidence = self._write(
+            "evidence.json", {"companies": {"Northwind": {"hires": "none"}}}
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "hires")
+
+    # --- site 3: recheck_interval_days is not an int ---------------------
+
+    def test_non_integer_recheck_interval_is_refused(self):
+        config = self._config(signal_class={"recheck_interval_days": "seven"})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "recheck_interval_days")
+
+    # --- site 4: a path that is a directory ------------------------------
+
+    def test_state_path_that_is_a_directory_is_refused(self):
+        code, out, err = self._main(
+            ["check", "--state", self.tmp, "--as-of", "2026-09-10"]
+        )
+
+        self._assert_refused(code, out, err, "state file")
+
+    def test_evidence_path_that_is_a_directory_is_refused(self):
+        code, out, err = self._main(self.base_args(evidence=self.tmp))
+
+        self._assert_refused(code, out, err, "evidence file")
+
+    def test_config_path_that_is_a_directory_is_refused(self):
+        code, out, err = self._main(self.base_args(config=self.tmp))
+
+        self._assert_refused(code, out, err, "config file")
+
+    # --- site 5: --out into a directory that does not exist --------------
+
+    def test_out_path_in_a_nonexistent_directory_is_refused(self):
+        target = os.path.join(self.tmp, "nope", "verdicts.json")
+
+        code, out, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE, out=target)
+        )
+
+        self._assert_refused(code, out, err, target)
+
+    def test_ledger_path_that_is_a_directory_is_refused_on_save(self):
+        code, out, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE, ledger=self.tmp)
+        )
+
+        self._assert_refused(code, out, err, "ledger")
+
+    # --- explicit null thresholds disarm a check -------------------------
+
+    def test_explicit_null_thresholds_is_refused(self):
+        """`thresholds: null` used to be laundered into {} and disarm the check.
+
+        A disarmed threshold check reports VALID, which is the one outcome that
+        must never happen by accident.
+        """
+        config = self._write(
+            "config.json",
+            {
+                "falsifiers": {
+                    "evergreen_age_ceiling": {
+                        "check": "age_ceiling",
+                        "statement": "Age is below the evergreen ceiling.",
+                        "thresholds": None,
+                    }
+                },
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": ["evergreen_age_ceiling"],
+                    }
+                },
+                "function_map": {"gtm": ["gtm"]},
+            },
+        )
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "thresholds")
+
+    def test_a_null_threshold_config_cannot_report_an_old_posting_valid(self):
+        """The consequence, stated as behavior: a 192-day posting must not pass."""
+        config = self._write(
+            "config.json",
+            {
+                "falsifiers": {
+                    "evergreen_age_ceiling": {
+                        "check": "age_ceiling",
+                        "statement": "Age is below the evergreen ceiling.",
+                        "thresholds": None,
+                    }
+                },
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": ["evergreen_age_ceiling"],
+                    }
+                },
+                "function_map": {"gtm": ["gtm"]},
+            },
+        )
+        state = self._state(title="GTM Engineer")
+
+        code, out, err = self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--config",
+                config,
+                "--as-of",
+                "2026-09-10",
+                "--ranking-only",
+            ]
+        )
+
+        self._assert_refused(code, out, err, "thresholds")
+        self.assertNotIn("li-1", out)
+
+    def test_an_omitted_thresholds_key_is_still_fine(self):
+        """Absent is not the same as explicitly null. Absent stays legal."""
+        config = self._write(
+            "config.json",
+            {
+                "falsifiers": {
+                    "no_hires_since_posting": {
+                        "check": "no_hires_since_posting",
+                        "statement": "No hires since the posting date.",
+                    }
+                },
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": ["no_hires_since_posting"],
+                    }
+                },
+                "function_map": {"gtm": ["gtm"]},
+            },
+        )
+
+        code, _, err = self._main(self.base_args(config=config))
+
+        self.assertEqual(code, 0, err)
+
+    def test_an_empty_thresholds_object_is_still_fine(self):
+        """`{}` is legitimate: no_hires_since_posting ships with exactly that."""
+        config = self._config()
+
+        code, _, err = self._main(self.base_args(config=config))
+
+        self.assertEqual(code, 0, err)
+
+    # --- function_map VALUES, not just the map ---------------------------
+
+    def test_function_map_value_that_is_a_string_is_refused(self):
+        """A bare string is iterated CHARACTER BY CHARACTER by map_function.
+
+        So "growth engineering" makes nearly any title match, and the hire
+        check silently scopes itself to a function the operator never meant.
+        The config surface the README tells people to hand-edit must not
+        accept this.
+        """
+        config = self._config(function_map={"gtm": "growth engineering"})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_function_map_value_that_is_an_int_is_refused(self):
+        config = self._config(function_map={"gtm": 7})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_function_map_keyword_that_is_not_a_string_is_refused(self):
+        config = self._config(function_map={"gtm": ["gtm", 7]})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_function_map_empty_keyword_is_refused(self):
+        """An empty keyword is `"" in haystack`, which is True for every title."""
+        config = self._config(function_map={"gtm": [""]})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_a_string_function_map_cannot_fabricate_an_affirmative_verdict(self):
+        """The reviewer's construction, end to end.
+
+        "Warehouse Associate" maps to no function, so it must fail closed to
+        SUSPECT. With `"gtm": "growth engineering"` the character-wise scan
+        matched on 'r', scoped the hire check to gtm, found no gtm hires, and
+        reported VALID -- an affirmative claim manufactured from a typo, which
+        then RANKED. The run must refuse at config load instead.
+        """
+        config = self._config(function_map={"gtm": "growth engineering"})
+        state = self._state(title="Warehouse Associate")
+        evidence = self._write(
+            "evidence.json",
+            {"companies": {"Northwind Analytics": {"hires": []}}},
+        )
+
+        code, out, err = self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--evidence",
+                evidence,
+                "--config",
+                config,
+                "--as-of",
+                "2026-09-10",
+                "--ranking-only",
+            ]
+        )
+
+        self._assert_refused(code, out, err, "function_map")
+        self.assertNotIn("li-1", out, "a refused run must rank nothing")
+
+    def test_a_well_formed_function_map_still_loads(self):
+        """The guard must not reject the shape the repo config actually uses."""
+        from sdd.config import DEFAULT_CONFIG_PATH, load_config
+
+        config = load_config(DEFAULT_CONFIG_PATH)
+
+        self.assertIn("gtm", config.function_map)
+        self.assertIn("gtm", config.function_map["gtm"])
+
+    # --- a refused run must not have already changed state ---------------
+
+    def test_a_failed_out_write_leaves_the_ledger_untouched(self):
+        """Exit 2 means nothing happened, including to the ledger.
+
+        The --out write used to run AFTER ledger.save(), so a refused run had
+        already overwritten the pre-run ledger. That destroys the baseline the
+        next run compares against, and the operator has no way to know.
+        """
+        ledger = os.path.join(self.tmp, "ledger.json")
+        before = {
+            "version": 1,
+            "signals": {
+                "li-9000000001": {"last_checked": "2026-09-01", "verdict": "VALID"}
+            },
+        }
+        with open(ledger, "w", encoding="utf-8") as handle:
+            json.dump(before, handle)
+
+        code, out, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE)
+            + ["--ledger", ledger, "--out", os.path.join(self.tmp, "nope", "v.json")]
+        )
+
+        self._assert_refused(code, out, err, "--out")
+        with open(ledger, "r", encoding="utf-8") as handle:
+            after = json.load(handle)
+        self.assertEqual(after, before, "a refused run must not rewrite the ledger")
+
+    def test_a_successful_run_still_writes_both_the_ledger_and_out(self):
+        """The reorder must not cost either write on the happy path."""
+        ledger = os.path.join(self.tmp, "ledger.json")
+        out_path = os.path.join(self.tmp, "verdicts.json")
+
+        code, _, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE)
+            + ["--ledger", ledger, "--out", out_path]
+        )
+
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.exists(ledger))
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path, "r", encoding="utf-8") as handle:
+            self.assertEqual(len(json.load(handle)["verdicts"]), 5)
+
+    # --- the same shape, one level up: config sections -------------------
+
+    def test_config_falsifiers_section_that_is_not_an_object_is_refused(self):
+        config = self._write("config.json", {"falsifiers": [], "signal_classes": {}})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "falsifiers")
+
+    def test_config_falsifier_entry_that_is_not_an_object_is_refused(self):
+        config = self._write(
+            "config.json", {"falsifiers": {"bad": "age_ceiling"}, "signal_classes": {}}
+        )
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "bad")
 
 
 class TestCleanCloneUsability(unittest.TestCase):
