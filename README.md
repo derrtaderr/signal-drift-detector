@@ -43,7 +43,7 @@ Nothing to install. Python 3.8 or newer, standard library only, no keys, no netw
 ```bash
 git clone https://github.com/derrtaderr/signal-drift-detector.git
 cd signal-drift-detector
-python3 tests.py          # 74 tests, no network, should print OK
+python3 tests.py          # 94 tests, no network, should print OK
 ```
 
 ## Run it against the bundled fixture
@@ -95,9 +95,11 @@ That pairing is the point. You are meant to be able to disagree with a verdict b
 two lines, not by re-deriving the check. If you think 180 days is the wrong evergreen
 ceiling for your market, that number is in `config.json`, not in the code.
 
-Three separate things produce `SUSPECT`, and the evidence line always says which:
+Four separate things produce `SUSPECT`, and the evidence line always says which:
 
-- **nobody has looked** — the company has no entry in the evidence file
+- **no evidence source configured** — no `--evidence` file was given at all, so the hire
+  check could not run. This is about the run, not about any company.
+- **nobody has looked** — an evidence file WAS given, and the company has no entry in it
 - **title does not map to a known function** — the hire check cannot be scoped, so it is
   not run rather than run against everything
 - **check raised** — the check itself failed; the exception text is in the evidence
@@ -150,8 +152,8 @@ while still printing the report.
 | `--show-valid-detail` | Print every falsifier for VALID signals too. |
 | `--out PATH` | Also write JSON verdicts to a file. |
 
-Exit codes: `0` the run completed, `2` bad input (the message goes to stderr, never a
-traceback).
+Exit codes: `0` the run completed, `1` no subcommand given (bare `python3 -m sdd` prints
+help), `2` bad input (the message goes to stderr, never a traceback).
 
 ## The evidence file
 
@@ -235,7 +237,7 @@ sdd/engine.py        orchestration, worst-wins, fail-closed
 sdd/report.py        human-readable rendering
 sdd/cli.py           argument parsing
 fixtures/            synthetic state + evidence, calibrated to 2026-09-10
-tests.py             74 tests, deterministic, no network
+tests.py             94 tests, deterministic, no network
 docs/SPEC.md         scope, design decisions, prior art
 .vibecodepm/         flow map and metrics definition
 ```

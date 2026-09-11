@@ -131,8 +131,9 @@ sdd/checks.py          check implementations keyed by check id
 sdd/schedule.py        ledger read/write, due/not-due
 sdd/engine.py          orchestration, worst-wins, fail-closed
 sdd/report.py          human-readable rendering
-sdd.py                 CLI entry point
-fixtures/              synthetic state.json + evidence.json
+sdd/cli.py             argument parsing, CLI entry point
+sdd/__main__.py        `python3 -m sdd` entry point
+fixtures/              synthetic state.sample.json + evidence.sample.json
 tests.py               stdlib unittest; run with `python3 tests.py`
 ```
 
