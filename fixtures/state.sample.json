@@ -1,0 +1,52 @@
+{
+  "li-9000000001": {
+    "company": "Northwind Analytics",
+    "title": "GTM Engineer",
+    "date_posted": "2026-03-02",
+    "job_url": "https://example.invalid/jobs/9000000001",
+    "company_url": "https://example.invalid/company/northwind-analytics",
+    "first_seen": "2026-03-04",
+    "reported": true,
+    "last_seen": "2026-09-09"
+  },
+  "li-9000000002": {
+    "company": "Cobalt Systems",
+    "title": "AI Engineer, Platform",
+    "date_posted": "2026-07-15",
+    "job_url": "https://example.invalid/jobs/9000000002",
+    "company_url": "https://example.invalid/company/cobalt-systems",
+    "first_seen": "2026-07-16",
+    "reported": false,
+    "last_seen": "2026-09-09"
+  },
+  "li-9000000003": {
+    "company": "Peregrine Labs",
+    "title": "Revenue Operations Manager",
+    "date_posted": "2026-04-20",
+    "job_url": "https://example.invalid/jobs/9000000003",
+    "company_url": "https://example.invalid/company/peregrine-labs",
+    "first_seen": "2026-04-22",
+    "reported": true,
+    "last_seen": "2026-09-09"
+  },
+  "li-9000000004": {
+    "company": "Tessellate Group",
+    "title": "Head of Growth Engineering",
+    "date_posted": "2026-06-01",
+    "job_url": "https://example.invalid/jobs/9000000004",
+    "company_url": "https://example.invalid/company/tessellate-group",
+    "first_seen": "2026-06-03",
+    "reported": true,
+    "last_seen": "2026-07-01"
+  },
+  "li-9000000005": {
+    "company": "Halcyon Freight",
+    "title": "Machine Learning Engineer",
+    "date_posted": "2026-08-20",
+    "job_url": "https://example.invalid/jobs/9000000005",
+    "company_url": "https://example.invalid/company/halcyon-freight",
+    "first_seen": "2026-08-21",
+    "reported": false,
+    "last_seen": "2026-09-09"
+  }
+}
