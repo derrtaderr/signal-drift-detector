@@ -91,9 +91,20 @@ class FileEvidenceSource:
                         "hire entry for %s must be an object, got %s"
                         % (company, type(hire).__name__)
                     )
+                function = hire.get("function")
+                if not isinstance(function, str) or not function.strip():
+                    # An unscoped hire can never match a function, so it could
+                    # never invalidate anything, and the falsifier would report
+                    # "looked, found nothing" from a file that found a hire.
+                    # Refuse it the same way a bad hire date is refused.
+                    raise DriftError(
+                        "hire entry for %s has a function that is not a "
+                        "non-empty string: %r. An unscoped hire can never "
+                        "falsify a posting." % (company, function)
+                    )
                 hires.append(
                     {
-                        "function": hire.get("function"),
+                        "function": function,
                         "date": parse_date(
                             hire.get("date"), "hire date for %s" % company
                         ),

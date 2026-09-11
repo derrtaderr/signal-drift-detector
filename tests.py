@@ -1286,6 +1286,84 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
 
         self._assert_refused(code, out, err, "Northwind")
 
+    def test_hire_with_a_null_function_is_refused(self):
+        """A hire nobody scoped cannot invalidate anything.
+
+        The record says somebody WAS hired, but `function: null` matches no
+        function, so the falsifier reported VALID "looked, found nothing" from
+        a file that plainly found something. The date field already refuses
+        this way; function now does too.
+        """
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "hires": [{"function": None, "date": "2026-06-14"}]
+                    }
+                }
+            },
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "function")
+
+    def test_hire_with_a_non_string_function_is_refused(self):
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "hires": [{"function": 7, "date": "2026-06-14"}]
+                    }
+                }
+            },
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "function")
+
+    def test_hire_with_a_missing_function_is_refused(self):
+        evidence = self._write(
+            "evidence.json",
+            {"companies": {"Northwind Analytics": {"hires": [{"date": "2026-06-14"}]}}},
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "function")
+
+    def test_a_null_function_hire_cannot_be_reported_as_found_nothing(self):
+        """The consequence: the run must not claim the company is clean."""
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "hires": [{"function": None, "date": "2026-06-14"}]
+                    }
+                }
+            },
+        )
+        state = self._state(title="GTM Engineer")
+
+        code, out, err = self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--evidence",
+                evidence,
+                "--as-of",
+                "2026-09-10",
+            ]
+        )
+
+        self._assert_refused(code, out, err, "function")
+        self.assertNotIn("no hires into", out)
+
     def test_evidence_hires_that_is_not_a_list_is_refused(self):
         evidence = self._write(
             "evidence.json", {"companies": {"Northwind": {"hires": "none"}}}
