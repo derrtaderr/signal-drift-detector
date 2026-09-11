@@ -1604,6 +1604,51 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
         self.assertIn("gtm", config.function_map)
         self.assertIn("gtm", config.function_map["gtm"])
 
+    # --- a refused run must not have already changed state ---------------
+
+    def test_a_failed_out_write_leaves_the_ledger_untouched(self):
+        """Exit 2 means nothing happened, including to the ledger.
+
+        The --out write used to run AFTER ledger.save(), so a refused run had
+        already overwritten the pre-run ledger. That destroys the baseline the
+        next run compares against, and the operator has no way to know.
+        """
+        ledger = os.path.join(self.tmp, "ledger.json")
+        before = {
+            "version": 1,
+            "signals": {
+                "li-9000000001": {"last_checked": "2026-09-01", "verdict": "VALID"}
+            },
+        }
+        with open(ledger, "w", encoding="utf-8") as handle:
+            json.dump(before, handle)
+
+        code, out, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE)
+            + ["--ledger", ledger, "--out", os.path.join(self.tmp, "nope", "v.json")]
+        )
+
+        self._assert_refused(code, out, err, "--out")
+        with open(ledger, "r", encoding="utf-8") as handle:
+            after = json.load(handle)
+        self.assertEqual(after, before, "a refused run must not rewrite the ledger")
+
+    def test_a_successful_run_still_writes_both_the_ledger_and_out(self):
+        """The reorder must not cost either write on the happy path."""
+        ledger = os.path.join(self.tmp, "ledger.json")
+        out_path = os.path.join(self.tmp, "verdicts.json")
+
+        code, _, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE)
+            + ["--ledger", ledger, "--out", out_path]
+        )
+
+        self.assertEqual(code, 0, err)
+        self.assertTrue(os.path.exists(ledger))
+        self.assertTrue(os.path.exists(out_path))
+        with open(out_path, "r", encoding="utf-8") as handle:
+            self.assertEqual(len(json.load(handle)["verdicts"]), 5)
+
     # --- the same shape, one level up: config sections -------------------
 
     def test_config_falsifiers_section_that_is_not_an_object_is_refused(self):
