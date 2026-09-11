@@ -177,16 +177,32 @@ def load_config(path=None):
         # nobody chose and manufacturing an affirmative "no hires into X".
         if not isinstance(keywords, list):
             raise DriftError(
-                "function_map entry %r must be a list of keywords, got %s. A "
-                "bare string would be matched one character at a time, so "
-                "nearly every title would map to it." % (function, type(keywords).__name__)
+                "function_map entry %r must be a list of keywords, got %s.%s"
+                % (
+                    function,
+                    type(keywords).__name__,
+                    (
+                        " A bare string is matched one character at a time, so "
+                        "nearly every title would map to it."
+                        if isinstance(keywords, str)
+                        else ""
+                    ),
+                )
             )
         for keyword in keywords:
             if not isinstance(keyword, str) or not keyword.strip():
                 raise DriftError(
                     "function_map entry %r has a keyword that is not a "
-                    "non-empty string: %r. An empty keyword matches every "
-                    "title." % (function, keyword)
+                    "non-empty string: %r.%s"
+                    % (
+                        function,
+                        keyword,
+                        (
+                            " An empty keyword matches every title."
+                            if isinstance(keyword, str)
+                            else ""
+                        ),
+                    )
                 )
 
     return Config(
