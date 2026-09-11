@@ -157,9 +157,29 @@ def load_config(path=None):
             falsifiers=tuple(resolved),
         )
 
+    function_map = _require_mapping(raw.get("function_map"), "function_map", path)
+    for function, keywords in function_map.items():
+        # The map itself being an object is not enough. map_function iterates
+        # each VALUE, so a bare string is scanned character by character and
+        # matches almost any title -- scoping the hire check to a function
+        # nobody chose and manufacturing an affirmative "no hires into X".
+        if not isinstance(keywords, list):
+            raise DriftError(
+                "function_map entry %r must be a list of keywords, got %s. A "
+                "bare string would be matched one character at a time, so "
+                "nearly every title would map to it." % (function, type(keywords).__name__)
+            )
+        for keyword in keywords:
+            if not isinstance(keyword, str) or not keyword.strip():
+                raise DriftError(
+                    "function_map entry %r has a keyword that is not a "
+                    "non-empty string: %r. An empty keyword matches every "
+                    "title." % (function, keyword)
+                )
+
     return Config(
         falsifiers=falsifiers,
         signal_classes=signal_classes,
-        function_map=_require_mapping(raw.get("function_map"), "function_map", path),
+        function_map=function_map,
         path=path,
     )

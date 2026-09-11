@@ -1238,6 +1238,20 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
         raw.update(overrides)
         return self._write("config.json", raw)
 
+    def _state(self, title="Warehouse Associate", company="Northwind Analytics"):
+        return self._write(
+            "state.json",
+            {
+                "li-1": {
+                    "company": company,
+                    "title": title,
+                    "date_posted": "2026-03-02",
+                    "last_seen": "2026-09-09",
+                    "job_url": "https://example.invalid/jobs/1",
+                }
+            },
+        )
+
     def _assert_refused(self, code, out, err, needle):
         self.assertEqual(code, 2, "expected exit 2 (refused input), got %r" % code)
         self.assertNotIn("Traceback", err)
@@ -1326,6 +1340,87 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
         )
 
         self._assert_refused(code, out, err, "ledger")
+
+    # --- function_map VALUES, not just the map ---------------------------
+
+    def test_function_map_value_that_is_a_string_is_refused(self):
+        """A bare string is iterated CHARACTER BY CHARACTER by map_function.
+
+        So "growth engineering" makes nearly any title match, and the hire
+        check silently scopes itself to a function the operator never meant.
+        The config surface the README tells people to hand-edit must not
+        accept this.
+        """
+        config = self._config(function_map={"gtm": "growth engineering"})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_function_map_value_that_is_an_int_is_refused(self):
+        config = self._config(function_map={"gtm": 7})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_function_map_keyword_that_is_not_a_string_is_refused(self):
+        config = self._config(function_map={"gtm": ["gtm", 7]})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_function_map_empty_keyword_is_refused(self):
+        """An empty keyword is `"" in haystack`, which is True for every title."""
+        config = self._config(function_map={"gtm": [""]})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "function_map")
+
+    def test_a_string_function_map_cannot_fabricate_an_affirmative_verdict(self):
+        """The reviewer's construction, end to end.
+
+        "Warehouse Associate" maps to no function, so it must fail closed to
+        SUSPECT. With `"gtm": "growth engineering"` the character-wise scan
+        matched on 'r', scoped the hire check to gtm, found no gtm hires, and
+        reported VALID -- an affirmative claim manufactured from a typo, which
+        then RANKED. The run must refuse at config load instead.
+        """
+        config = self._config(function_map={"gtm": "growth engineering"})
+        state = self._state(title="Warehouse Associate")
+        evidence = self._write(
+            "evidence.json",
+            {"companies": {"Northwind Analytics": {"hires": []}}},
+        )
+
+        code, out, err = self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--evidence",
+                evidence,
+                "--config",
+                config,
+                "--as-of",
+                "2026-09-10",
+                "--ranking-only",
+            ]
+        )
+
+        self._assert_refused(code, out, err, "function_map")
+        self.assertNotIn("li-1", out, "a refused run must rank nothing")
+
+    def test_a_well_formed_function_map_still_loads(self):
+        """The guard must not reject the shape the repo config actually uses."""
+        from sdd.config import DEFAULT_CONFIG_PATH, load_config
+
+        config = load_config(DEFAULT_CONFIG_PATH)
+
+        self.assertIn("gtm", config.function_map)
+        self.assertIn("gtm", config.function_map["gtm"])
 
     # --- the same shape, one level up: config sections -------------------
 
