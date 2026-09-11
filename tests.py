@@ -743,6 +743,29 @@ class TestScheduleLedger(unittest.TestCase):
         self.assertEqual(entry["verdict"], INVALIDATED)
         self.assertEqual(entry["last_checked"], AS_OF)
 
+    def test_an_entry_with_an_unreadable_verdict_is_due(self):
+        """A cached verdict nobody can classify is not a usable cache entry."""
+        from sdd.schedule import Ledger
+
+        ledger = Ledger.load(self.path)
+        ledger.record("li-1", None, AS_OF)
+        self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
+        ledger.record("li-2", "PROBABLY_FINE", AS_OF)
+        self.assertTrue(ledger.is_due("li-2", interval_days=7, as_of=AS_OF))
+
+    def test_a_row_missing_its_verdict_is_dropped_on_load(self):
+        from sdd.schedule import Ledger
+
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"signals": {"li-1": {"last_checked": "2026-09-10"}}}, handle
+            )
+
+        ledger = Ledger.load(self.path)
+
+        self.assertIsNone(ledger.entry("li-1"))
+
     def test_a_ledger_whose_signals_are_not_an_object_is_discarded(self):
         """Same shape as the other input bugs, but a ledger is a CACHE.
 
@@ -1036,6 +1059,87 @@ class TestCli(unittest.TestCase):
             hire["evidence"],
         )
         self.assertNotIn("no evidence source configured", hire["evidence"])
+
+    def _ledger_with(self, row):
+        """A ledger holding one row for the golden signal, checked today.
+
+        Today means inside the 7-day interval, so an intact row WOULD be
+        carried forward. That is what makes these tests about the verdict's
+        readability rather than about the schedule.
+        """
+        path = os.path.join(self.tmp, "ledger.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"version": 1, "signals": {"li-9000000001": row}}, handle)
+        return path
+
+    def test_a_ledger_row_with_no_verdict_is_re_checked_not_carried_forward(self):
+        """flow.md: a partial ledger is discarded and everything is re-checked.
+
+        A hand-edited row without a verdict used to carry forward as None,
+        match no report section, and vanish from the body while still being
+        counted in the header.
+        """
+        ledger = self._ledger_with({"last_checked": "2026-09-10"})
+
+        code, out, _ = self._main(
+            self.base_args() + ["--format", "json", "--ledger", ledger]
+        )
+        payload = json.loads(out)
+        golden = [
+            v for v in payload["verdicts"] if v["signal_id"] == "li-9000000001"
+        ][0]
+
+        self.assertEqual(code, 0)
+        self.assertFalse(golden["carried_forward"])
+        self.assertEqual(golden["verdict"], "INVALIDATED")
+        self.assertTrue(golden["falsifiers"], "a re-checked signal carries receipts")
+
+    def test_a_ledger_row_with_an_unrecognized_verdict_is_re_checked(self):
+        ledger = self._ledger_with(
+            {"last_checked": "2026-09-10", "verdict": "PROBABLY_FINE"}
+        )
+
+        code, out, _ = self._main(
+            self.base_args() + ["--format", "json", "--ledger", ledger]
+        )
+        payload = json.loads(out)
+        golden = [
+            v for v in payload["verdicts"] if v["signal_id"] == "li-9000000001"
+        ][0]
+
+        self.assertEqual(code, 0)
+        self.assertFalse(golden["carried_forward"])
+        self.assertEqual(golden["verdict"], "INVALIDATED")
+
+    def test_a_re_checked_corrupt_row_is_visible_in_the_report_body(self):
+        """The invariant: nothing counted in the header may be absent below it."""
+        ledger = self._ledger_with({"last_checked": "2026-09-10"})
+
+        code, out, _ = self._main(self.base_args() + ["--ledger", ledger])
+
+        self.assertEqual(code, 0)
+        self.assertIn("li-9000000001", out)
+        self.assertIn("Northwind Analytics", out)
+
+        # Every signal the header counts must appear as a row in the body.
+        header = [line for line in out.splitlines() if "signals checked" in line][0]
+        counted = int(header.split("(")[1].split(" ")[0])
+        body_rows = [
+            line for line in out.splitlines() if line.startswith("  [")
+        ]
+        self.assertEqual(len(body_rows), counted)
+
+    def test_a_corrupt_row_is_healed_in_the_ledger_it_writes_back(self):
+        ledger = self._ledger_with({"last_checked": "2026-09-10"})
+
+        code, _, _ = self._main(self.base_args() + ["--ledger", ledger])
+
+        self.assertEqual(code, 0)
+        with open(ledger, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual(
+            saved["signals"]["li-9000000001"]["verdict"], "INVALIDATED"
+        )
 
     def test_a_malformed_state_file_exits_nonzero_with_a_message_not_a_traceback(self):
         bad = os.path.join(self.tmp, "state.json")
