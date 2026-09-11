@@ -1,5 +1,12 @@
 # Wiring
 
+> **APPLIED 2026-09-10.** Both edits below landed (Jason's yes on card #359, path 1): /weekly
+> Step 0.8 runs the drift check on every pass (command adapted to run from the vault root,
+> verified live, exit 0 over 257 signals), and the vacancy-monitor README improvement queue
+> points here. `<CLONE>` resolved to `builds/signal-drift-detector`. Evidence exists:
+> `hires.json` (real, hand-researched 2026-09-10, gitignored) + `evidence-notes-2026-09-10.md`.
+> The text below is preserved as the proposal record.
+
 This lane wrote nothing outside its own worktree. The edits below are proposals for the
 orchestrator to apply at merge, given as exact old→new strings against files in the vault.
 
