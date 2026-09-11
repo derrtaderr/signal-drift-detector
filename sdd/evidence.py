@@ -21,9 +21,15 @@ from .model import DriftError, parse_date
 
 
 class NullEvidenceSource:
-    """Knows nothing about anybody. Every check that needs it fails closed."""
+    """Knows nothing about anybody. Every check that needs it fails closed.
+
+    ``configured = False`` is the type-level fact that this stands in for an
+    evidence source the operator never supplied. A check must report that as a
+    missing source, never as a statement about a company.
+    """
 
     name = "none"
+    configured = False
 
     def observations(self, company):
         return None
@@ -41,6 +47,7 @@ class FileEvidenceSource:
     """
 
     name = "file"
+    configured = True
 
     def __init__(self, path):
         self.path = path

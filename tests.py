@@ -288,6 +288,31 @@ class TestNoHiresSincePostingFalsifier(unittest.TestCase):
         )
         self.assertEqual(result.status, VALID)
 
+    def test_a_null_source_reports_no_source_configured_not_nobody_looked(self):
+        """NullEvidenceSource IS "no evidence source configured".
+
+        The CLI always hands the check a source object, so gating the promised
+        message on ``evidence is None`` alone made it unreachable in a real run
+        and blamed the company for a flag the operator forgot.
+        """
+        from sdd.evidence import NullEvidenceSource
+        from sdd.model import SUSPECT
+
+        result = self._run(
+            make_signal(
+                company="Northwind Analytics",
+                title="GTM Engineer",
+                date_posted=date(2026, 3, 2),
+            ),
+            source=NullEvidenceSource(),
+        )
+
+        self.assertEqual(result.status, SUSPECT)
+        self.assertEqual(
+            result.evidence,
+            "no evidence source configured, so the hire check could not run",
+        )
+
     def test_company_nobody_looked_at_is_suspect_not_valid(self):
         from sdd.model import SUSPECT
 
@@ -952,6 +977,49 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["summary"]["VALID"], 0)
+
+        # The reason must blame the missing flag, not the companies. A run with
+        # no evidence source says so on every hire falsifier; it must never
+        # report "nobody has looked", which is a claim about a company.
+        hire_reasons = [
+            f["evidence"]
+            for verdict in payload["verdicts"]
+            for f in verdict["falsifiers"]
+            if f["name"] == "no_hires_since_posting"
+        ]
+        self.assertTrue(hire_reasons)
+        for reason in hire_reasons:
+            self.assertIn(
+                "no evidence source configured, so the hire check could not run",
+                reason,
+            )
+            self.assertNotIn("nobody has looked", reason)
+
+    def test_a_company_absent_from_a_supplied_evidence_file_says_nobody_looked(self):
+        """The two fail-closed reasons must stay distinguishable in output.
+
+        An evidence file WAS configured, so a company missing from it is a
+        statement about that company, not about the operator's flags.
+        """
+        code, out, _ = self._main(self.base_args() + ["--format", "json"])
+        payload = json.loads(out)
+
+        self.assertEqual(code, 0)
+        peregrine = [
+            v for v in payload["verdicts"] if v["company"] == "Peregrine Labs"
+        ][0]
+        hire = [
+            f
+            for f in peregrine["falsifiers"]
+            if f["name"] == "no_hires_since_posting"
+        ][0]
+
+        self.assertEqual(hire["status"], "SUSPECT")
+        self.assertIn(
+            "no hire observations on record for Peregrine Labs, so nobody has looked",
+            hire["evidence"],
+        )
+        self.assertNotIn("no evidence source configured", hire["evidence"])
 
     def test_a_malformed_state_file_exits_nonzero_with_a_message_not_a_traceback(self):
         bad = os.path.join(self.tmp, "state.json")
