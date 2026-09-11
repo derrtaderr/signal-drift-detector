@@ -28,6 +28,10 @@ def load_vacancy_signals(path, as_of=None):
         raise DriftError("state file not found: %s" % path)
     except json.JSONDecodeError as exc:
         raise DriftError("state file is not valid JSON (%s): %s" % (path, exc))
+    except OSError as exc:
+        # A directory, a permission wall, an unreadable device. All the same
+        # answer: refuse the input, never surface a traceback.
+        raise DriftError("state file could not be read (%s): %s" % (path, exc))
 
     if not isinstance(raw, dict):
         raise DriftError(

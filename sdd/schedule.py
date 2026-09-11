@@ -12,7 +12,7 @@ a stale ledger — would recreate the exact blindness the tool is built to close
 import json
 import os
 
-from .model import parse_date
+from .model import DriftError, parse_date
 
 
 class Ledger:
@@ -33,6 +33,10 @@ class Ledger:
             signals = raw.get("signals") or {}
         except (json.JSONDecodeError, AttributeError, OSError):
             # Unreadable ledger means everything is due. Never fatal.
+            return cls(path=path)
+
+        if not isinstance(signals, dict):
+            # Right key, wrong shape. Still just an unusable cache.
             return cls(path=path)
 
         entries = {}
@@ -65,9 +69,6 @@ class Ledger:
         target = path or self.path
         if not target:
             return
-        directory = os.path.dirname(os.path.abspath(target))
-        if directory and not os.path.isdir(directory):
-            os.makedirs(directory, exist_ok=True)
         payload = {
             "version": 1,
             "signals": {
@@ -78,6 +79,12 @@ class Ledger:
                 for signal_id, entry in sorted(self._entries.items())
             },
         }
-        with open(target, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True)
-            handle.write("\n")
+        try:
+            directory = os.path.dirname(os.path.abspath(target))
+            if directory and not os.path.isdir(directory):
+                os.makedirs(directory, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+        except OSError as exc:
+            raise DriftError("ledger could not be written (%s): %s" % (target, exc))

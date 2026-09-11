@@ -51,6 +51,22 @@ class Config:
     path: str = ""
 
 
+def _require_mapping(value, what, path):
+    """Return ``value`` as a dict, or refuse the input naming what was wrong.
+
+    An absent section is an empty one. A section of the wrong TYPE is an error,
+    never an empty one: ``"falsifiers": []`` silently registering zero
+    falsifiers is the same silent-skip this module exists to reject.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise DriftError(
+            "%s must be an object in %s, got %s" % (what, path, type(value).__name__)
+        )
+    return value
+
+
 def load_config(path=None):
     """Read and validate a config file."""
     path = path or DEFAULT_CONFIG_PATH
@@ -62,9 +78,19 @@ def load_config(path=None):
         raise DriftError("config file not found: %s" % path)
     except json.JSONDecodeError as exc:
         raise DriftError("config file is not valid JSON (%s): %s" % (path, exc))
+    except OSError as exc:
+        raise DriftError("config file could not be read (%s): %s" % (path, exc))
+
+    raw = _require_mapping(raw, "config", path)
 
     falsifiers = {}
-    for name, entry in (raw.get("falsifiers") or {}).items():
+    for name, entry in _require_mapping(
+        raw.get("falsifiers"), "falsifiers", path
+    ).items():
+        if not isinstance(entry, dict):
+            raise DriftError(
+                "falsifier %r must be an object, got %s" % (name, type(entry).__name__)
+            )
         check_id = entry.get("check")
         if check_id not in CHECKS:
             raise DriftError(
@@ -82,12 +108,26 @@ def load_config(path=None):
             check_id=check_id,
             check=CHECKS[check_id],
             statement=statement,
-            thresholds=entry.get("thresholds") or {},
+            thresholds=_require_mapping(
+                entry.get("thresholds"), "thresholds for falsifier %r" % name, path
+            ),
         )
 
     signal_classes = {}
-    for name, entry in (raw.get("signal_classes") or {}).items():
+    for name, entry in _require_mapping(
+        raw.get("signal_classes"), "signal_classes", path
+    ).items():
+        if not isinstance(entry, dict):
+            raise DriftError(
+                "signal class %r must be an object, got %s"
+                % (name, type(entry).__name__)
+            )
         names = entry.get("falsifiers") or []
+        if not isinstance(names, list):
+            raise DriftError(
+                "signal class %r must list its falsifiers as an array, got %s"
+                % (name, type(names).__name__)
+            )
         resolved = []
         for falsifier_name in names:
             if falsifier_name not in falsifiers:
@@ -101,16 +141,25 @@ def load_config(path=None):
                 "signal class %r has no falsifiers. An unfalsifiable class would "
                 "pass every run by default." % name
             )
+        interval = entry.get("recheck_interval_days", 7)
+        try:
+            interval = int(interval)
+        except (TypeError, ValueError):
+            raise DriftError(
+                "signal class %r has a non-integer recheck_interval_days: %r"
+                % (name, interval)
+            )
+
         signal_classes[name] = SignalClass(
             name=name,
             description=entry.get("description", ""),
-            recheck_interval_days=int(entry.get("recheck_interval_days", 7)),
+            recheck_interval_days=interval,
             falsifiers=tuple(resolved),
         )
 
     return Config(
         falsifiers=falsifiers,
         signal_classes=signal_classes,
-        function_map=raw.get("function_map") or {},
+        function_map=_require_mapping(raw.get("function_map"), "function_map", path),
         path=path,
     )

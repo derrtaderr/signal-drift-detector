@@ -58,6 +58,8 @@ class FileEvidenceSource:
             raise DriftError("evidence file not found: %s" % path)
         except json.JSONDecodeError as exc:
             raise DriftError("evidence file is not valid JSON (%s): %s" % (path, exc))
+        except OSError as exc:
+            raise DriftError("evidence file could not be read (%s): %s" % (path, exc))
 
         companies = raw.get("companies")
         if not isinstance(companies, dict):
@@ -67,8 +69,28 @@ class FileEvidenceSource:
 
         self._companies = {}
         for company, record in companies.items():
+            # A hand-edited evidence file is the normal case, so every shape
+            # below is verified before it is used. Guessing at a null record or
+            # a bare string where an object belongs is how this died with a
+            # stack trace instead of refusing the input.
+            if not isinstance(record, dict):
+                raise DriftError(
+                    "evidence for %s must be an object, got %s"
+                    % (company, type(record).__name__)
+                )
+            raw_hires = record.get("hires", [])
+            if not isinstance(raw_hires, list):
+                raise DriftError(
+                    "hires for %s must be a list, got %s"
+                    % (company, type(raw_hires).__name__)
+                )
             hires = []
-            for hire in record.get("hires", []):
+            for hire in raw_hires:
+                if not isinstance(hire, dict):
+                    raise DriftError(
+                        "hire entry for %s must be an object, got %s"
+                        % (company, type(hire).__name__)
+                    )
                 hires.append(
                     {
                         "function": hire.get("function"),

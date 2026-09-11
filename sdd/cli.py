@@ -111,9 +111,16 @@ def main(argv=None, stdout=None, stderr=None):
         if ledger is not None:
             ledger.save()
         if args.out:
-            with open(args.out, "w", encoding="utf-8") as handle:
-                json.dump(result.to_dict(), handle, indent=2)
-                handle.write("\n")
+            try:
+                with open(args.out, "w", encoding="utf-8") as handle:
+                    json.dump(result.to_dict(), handle, indent=2)
+                    handle.write("\n")
+            except OSError as exc:
+                # Refuse before anything reaches stdout. A run that could not
+                # write where it was told must not also look like it succeeded.
+                raise DriftError(
+                    "could not write --out file (%s): %s" % (args.out, exc)
+                )
     except DriftError as exc:
         stderr.write("error: %s\n" % exc)
         return 2

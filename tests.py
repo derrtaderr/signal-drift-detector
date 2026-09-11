@@ -743,6 +743,22 @@ class TestScheduleLedger(unittest.TestCase):
         self.assertEqual(entry["verdict"], INVALIDATED)
         self.assertEqual(entry["last_checked"], AS_OF)
 
+    def test_a_ledger_whose_signals_are_not_an_object_is_discarded(self):
+        """Same shape as the other input bugs, but a ledger is a CACHE.
+
+        Unreadable means re-check, which is already the fail-closed direction,
+        so this one is discarded rather than refused. It must not traceback.
+        """
+        from sdd.schedule import Ledger
+
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump({"signals": ["li-1"]}, handle)
+
+        ledger = Ledger.load(self.path)
+
+        self.assertIsNone(ledger.entry("li-1"))
+        self.assertTrue(ledger.is_due("li-1", interval_days=7, as_of=AS_OF))
+
     def test_a_corrupt_ledger_is_discarded_so_everything_recheck(self):
         """A ledger is a cache, never a source of truth. Unreadable means
         re-check everything, which is the fail-closed direction."""
@@ -1065,6 +1081,165 @@ class TestCli(unittest.TestCase):
         with open(out_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         self.assertEqual(len(payload["verdicts"]), 5)
+
+
+class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
+    """README promises exit 2 and a one-line message, never a traceback.
+
+    Every case below used to die with a stack trace and exit 1. They are one
+    class of bug, not five: an input the tool reads is a claim about the world,
+    and reading it must never assume a shape it did not verify. Each refusal
+    happens before any verdict is emitted, so the fail-closed direction holds —
+    these are clean refusals, never partial output.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _main(self, args):
+        from sdd.cli import main
+
+        out, err = io.StringIO(), io.StringIO()
+        code = main(args, stdout=out, stderr=err)
+        return code, out.getvalue(), err.getvalue()
+
+    def _write(self, name, obj):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(obj, handle)
+        return path
+
+    def _config(self, **overrides):
+        """A valid config, mutated by keyword for the case under test."""
+        signal_class = {
+            "description": "",
+            "recheck_interval_days": 7,
+            "falsifiers": ["no_hires_since_posting"],
+        }
+        signal_class.update(overrides.pop("signal_class", {}))
+        raw = {
+            "falsifiers": {
+                "no_hires_since_posting": {
+                    "check": "no_hires_since_posting",
+                    "statement": "No hires since the posting date.",
+                    "thresholds": {},
+                }
+            },
+            "signal_classes": {"vacancy_duration": signal_class},
+            "function_map": {"gtm": ["gtm"]},
+        }
+        raw.update(overrides)
+        return self._write("config.json", raw)
+
+    def _assert_refused(self, code, out, err, needle):
+        self.assertEqual(code, 2, "expected exit 2 (refused input), got %r" % code)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("error:", err)
+        self.assertIn(needle, err)
+        self.assertEqual(err.count("\n"), 1, "refusal must be one line: %r" % err)
+        self.assertEqual(out, "", "refused input must emit no verdicts")
+
+    def base_args(self, **kwargs):
+        args = ["check", "--state", SAMPLE_STATE, "--as-of", "2026-09-10"]
+        for flag, value in kwargs.items():
+            args += ["--" + flag.replace("_", "-"), value]
+        return args
+
+    # --- site 1: evidence company record is null -------------------------
+
+    def test_evidence_company_record_of_null_is_refused(self):
+        evidence = self._write("evidence.json", {"companies": {"Northwind": None}})
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "Northwind")
+
+    # --- site 2: a hire entry is not an object ---------------------------
+
+    def test_evidence_hire_entry_that_is_not_an_object_is_refused(self):
+        evidence = self._write(
+            "evidence.json", {"companies": {"Northwind": {"hires": ["2026-06-14"]}}}
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "Northwind")
+
+    def test_evidence_hires_that_is_not_a_list_is_refused(self):
+        evidence = self._write(
+            "evidence.json", {"companies": {"Northwind": {"hires": "none"}}}
+        )
+
+        code, out, err = self._main(self.base_args(evidence=evidence))
+
+        self._assert_refused(code, out, err, "hires")
+
+    # --- site 3: recheck_interval_days is not an int ---------------------
+
+    def test_non_integer_recheck_interval_is_refused(self):
+        config = self._config(signal_class={"recheck_interval_days": "seven"})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "recheck_interval_days")
+
+    # --- site 4: a path that is a directory ------------------------------
+
+    def test_state_path_that_is_a_directory_is_refused(self):
+        code, out, err = self._main(
+            ["check", "--state", self.tmp, "--as-of", "2026-09-10"]
+        )
+
+        self._assert_refused(code, out, err, "state file")
+
+    def test_evidence_path_that_is_a_directory_is_refused(self):
+        code, out, err = self._main(self.base_args(evidence=self.tmp))
+
+        self._assert_refused(code, out, err, "evidence file")
+
+    def test_config_path_that_is_a_directory_is_refused(self):
+        code, out, err = self._main(self.base_args(config=self.tmp))
+
+        self._assert_refused(code, out, err, "config file")
+
+    # --- site 5: --out into a directory that does not exist --------------
+
+    def test_out_path_in_a_nonexistent_directory_is_refused(self):
+        target = os.path.join(self.tmp, "nope", "verdicts.json")
+
+        code, out, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE, out=target)
+        )
+
+        self._assert_refused(code, out, err, target)
+
+    def test_ledger_path_that_is_a_directory_is_refused_on_save(self):
+        code, out, err = self._main(
+            self.base_args(evidence=SAMPLE_EVIDENCE, ledger=self.tmp)
+        )
+
+        self._assert_refused(code, out, err, "ledger")
+
+    # --- the same shape, one level up: config sections -------------------
+
+    def test_config_falsifiers_section_that_is_not_an_object_is_refused(self):
+        config = self._write("config.json", {"falsifiers": [], "signal_classes": {}})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "falsifiers")
+
+    def test_config_falsifier_entry_that_is_not_an_object_is_refused(self):
+        config = self._write(
+            "config.json", {"falsifiers": {"bad": "age_ceiling"}, "signal_classes": {}}
+        )
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "bad")
 
 
 class TestCleanCloneUsability(unittest.TestCase):
