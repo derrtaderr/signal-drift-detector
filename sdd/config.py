@@ -103,6 +103,18 @@ def load_config(path=None):
                 "falsifier %r has no statement. A claim nobody can read and "
                 "disagree with is not a falsifier." % name
             )
+        if "thresholds" in entry and entry["thresholds"] is None:
+            # An ABSENT thresholds key means "this check takes none", and {} is
+            # the same thing written out. An explicit null is different: it
+            # reads as a deliberate setting, but every threshold lookup then
+            # misses and the check reports VALID for input it should have
+            # caught. Disarming a falsifier must never look like configuring it.
+            raise DriftError(
+                "falsifier %r has thresholds set to null, which would disarm "
+                "its check silently. Omit the key, or use {}, to mean no "
+                "thresholds." % name
+            )
+
         falsifiers[name] = Falsifier(
             name=name,
             check_id=check_id,

@@ -1341,6 +1341,110 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
 
         self._assert_refused(code, out, err, "ledger")
 
+    # --- explicit null thresholds disarm a check -------------------------
+
+    def test_explicit_null_thresholds_is_refused(self):
+        """`thresholds: null` used to be laundered into {} and disarm the check.
+
+        A disarmed threshold check reports VALID, which is the one outcome that
+        must never happen by accident.
+        """
+        config = self._write(
+            "config.json",
+            {
+                "falsifiers": {
+                    "evergreen_age_ceiling": {
+                        "check": "age_ceiling",
+                        "statement": "Age is below the evergreen ceiling.",
+                        "thresholds": None,
+                    }
+                },
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": ["evergreen_age_ceiling"],
+                    }
+                },
+                "function_map": {"gtm": ["gtm"]},
+            },
+        )
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "thresholds")
+
+    def test_a_null_threshold_config_cannot_report_an_old_posting_valid(self):
+        """The consequence, stated as behavior: a 192-day posting must not pass."""
+        config = self._write(
+            "config.json",
+            {
+                "falsifiers": {
+                    "evergreen_age_ceiling": {
+                        "check": "age_ceiling",
+                        "statement": "Age is below the evergreen ceiling.",
+                        "thresholds": None,
+                    }
+                },
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": ["evergreen_age_ceiling"],
+                    }
+                },
+                "function_map": {"gtm": ["gtm"]},
+            },
+        )
+        state = self._state(title="GTM Engineer")
+
+        code, out, err = self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--config",
+                config,
+                "--as-of",
+                "2026-09-10",
+                "--ranking-only",
+            ]
+        )
+
+        self._assert_refused(code, out, err, "thresholds")
+        self.assertNotIn("li-1", out)
+
+    def test_an_omitted_thresholds_key_is_still_fine(self):
+        """Absent is not the same as explicitly null. Absent stays legal."""
+        config = self._write(
+            "config.json",
+            {
+                "falsifiers": {
+                    "no_hires_since_posting": {
+                        "check": "no_hires_since_posting",
+                        "statement": "No hires since the posting date.",
+                    }
+                },
+                "signal_classes": {
+                    "vacancy_duration": {
+                        "recheck_interval_days": 7,
+                        "falsifiers": ["no_hires_since_posting"],
+                    }
+                },
+                "function_map": {"gtm": ["gtm"]},
+            },
+        )
+
+        code, _, err = self._main(self.base_args(config=config))
+
+        self.assertEqual(code, 0, err)
+
+    def test_an_empty_thresholds_object_is_still_fine(self):
+        """`{}` is legitimate: no_hires_since_posting ships with exactly that."""
+        config = self._config()
+
+        code, _, err = self._main(self.base_args(config=config))
+
+        self.assertEqual(code, 0, err)
+
     # --- function_map VALUES, not just the map ---------------------------
 
     def test_function_map_value_that_is_a_string_is_refused(self):
