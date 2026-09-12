@@ -14,6 +14,7 @@ signal was trusted by default; it must never repeat that by default itself.
 from dataclasses import dataclass, field
 from datetime import date
 
+from .checks import FalsifierResult
 from .model import INVALIDATED, SUSPECT, VALID, worst
 
 
@@ -141,6 +142,42 @@ def run(signals, config, context, ledger=None, force=False):
     return RunResult(as_of=context.as_of, verdicts=tuple(verdicts))
 
 
+def _corroborate(outcomes):
+    """Apply conditional promotions, once, against the unpromoted results.
+
+    Some evidence only means something alongside other evidence. A hire into a
+    function is counterevidence to an unfilled-role reading; a hire PLUS a
+    listing that stopped appearing is the ordinary signature of a filled seat.
+    A check cannot see that, because it receives one signal and its own
+    thresholds, so it hands up a conditional (``FalsifierResult.corroborated_by``)
+    and this function resolves it. Combination already lives here, next to
+    worst-wins, which is where cross-falsifier reasoning belongs.
+
+    Two properties, both deliberate:
+
+    **The trigger set is computed once, from the results as the checks returned
+    them.** So a promotion can never itself trigger a further promotion, and the
+    outcome does not depend on the order falsifiers are listed in.
+
+    **Only INVALIDATED corroborates.** A SUSPECT sibling is itself an "I am not
+    sure," and two unsure readings do not add up to a sure one.
+    """
+    broken = {
+        falsifier.check_id
+        for falsifier, outcome in outcomes
+        if outcome.status == INVALIDATED
+    }
+
+    promoted = []
+    for falsifier, outcome in outcomes:
+        if outcome.corroborated_by:
+            trigger, status, evidence = outcome.corroborated_by
+            if trigger in broken:
+                outcome = FalsifierResult(status, evidence)
+        promoted.append((falsifier, outcome))
+    return promoted
+
+
 def evaluate_signal(signal, config, context):
     """Run every falsifier registered for this signal's class."""
     signal_class = config.signal_classes.get(signal.signal_class)
@@ -161,26 +198,27 @@ def evaluate_signal(signal, config, context):
             ),
         )
 
-    results = []
+    outcomes = []
     for falsifier in signal_class.falsifiers:
         try:
             outcome = falsifier.check(signal, falsifier.thresholds, context)
-            status, evidence = outcome.status, outcome.evidence
         except Exception as exc:  # fail closed, never let one check kill the run
-            status = SUSPECT
-            evidence = "check %r raised %s: %s" % (
-                falsifier.check_id,
-                type(exc).__name__,
-                exc,
+            outcome = FalsifierResult(
+                SUSPECT,
+                "check %r raised %s: %s"
+                % (falsifier.check_id, type(exc).__name__, exc),
             )
-        results.append(
-            FalsifierVerdict(
-                name=falsifier.name,
-                statement=falsifier.statement,
-                status=status,
-                evidence=evidence,
-            )
+        outcomes.append((falsifier, outcome))
+
+    results = [
+        FalsifierVerdict(
+            name=falsifier.name,
+            statement=falsifier.statement,
+            status=outcome.status,
+            evidence=outcome.evidence,
         )
+        for falsifier, outcome in _corroborate(outcomes)
+    ]
 
     return SignalVerdict(
         signal_id=signal.signal_id,
