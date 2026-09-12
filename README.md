@@ -53,7 +53,7 @@ Nothing to install. Python 3.8 or newer, standard library only, no keys, no netw
 ```bash
 git clone https://github.com/derrtaderr/signal-drift-detector.git
 cd signal-drift-detector
-python3 tests.py          # 143 tests, no network, should print OK
+python3 tests.py          # 149 tests, no network, should print OK
 ```
 
 ## Run it against the bundled fixture
@@ -268,11 +268,17 @@ ceiling, or teaching it a new title family is a config edit.
 title:
 
 ```json
-"single_seat_patterns": ["founding", "head of", "director of", "chief", "principal", "vp "]
+"single_seat_patterns": ["founding", "head of", "director of", "chief", "principal", "vp"]
 ```
 
-The trailing space in `"vp "` is deliberate — without it, `vp` matches inside ordinary
-words. It costs the match on "Sales VP", which fails toward `SUSPECT`, the safe direction.
+Patterns match at **word boundaries**, not anywhere in the string. That matters more here
+than it looks: a plain substring scan reads "MVP Growth Engineering Lead" as a VP posting
+and "Analyst Ahead Of Market" as a head-of posting, and both false fires land on
+`INVALIDATED` — discarding an account that may still be live, which is the expensive
+direction to be wrong in. The rule also settles "SVP Sales" without a special case, since
+`vp` there is preceded by `s`. A workspace that wants SVP treated as one chair adds `"svp"`,
+which is the right place for that judgment.
+
 Both this list and `function_map` are refused at load if a value is a bare string or an
 entry is empty, because a bare string is matched one character at a time and would make
 nearly every title match. An absent `single_seat_patterns` key means no title corroborates.
@@ -332,7 +338,7 @@ sdd/engine.py        orchestration, worst-wins, fail-closed
 sdd/report.py        human-readable rendering
 sdd/cli.py           argument parsing
 fixtures/            synthetic state + evidence, calibrated to 2026-09-10
-tests.py             143 tests, deterministic, no network
+tests.py             149 tests, deterministic, no network
 docs/SPEC.md         scope, design decisions, prior art
 .vibecodepm/         flow map and metrics definition
 ```

@@ -10,6 +10,7 @@ Which falsifiers apply to which signal class, and at what thresholds, is data
 (``config.json``). Only the implementations live here, keyed by check id.
 """
 
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
@@ -70,13 +71,32 @@ def match_single_seat(title, patterns):
     "GTM Engineer" is NOT single-seat. It could be one chair or five, and that
     ambiguity is exactly why a hire against it cannot invalidate a signal.
 
+    **Matching is at word boundaries, not anywhere in the string.** A plain
+    substring scan reads "MVP Growth Engineering Lead" as a VP posting and
+    "Analyst Ahead Of Market" as a head-of posting. Both false fires land on
+    INVALIDATED, which discards an account that may still be live -- the
+    expensive direction to be wrong in, and the one this whole change exists to
+    stop the tool being wrong in. So a pattern's first character must not be
+    preceded by a word character and its last must not be followed by one.
+
+    The rule also settles "SVP Sales" without a special case: "vp" there is
+    preceded by "s", so it does not match. A workspace that wants SVP treated as
+    one chair adds "svp" to config, which is the right place for that judgment.
+
     Returning the matched pattern rather than True is deliberate: the evidence
     line names which pattern fired, so the operator can disagree with that
     pattern specifically and edit it in config.
     """
     haystack = (title or "").lower()
     for pattern in patterns or ():
-        if pattern.lower() in haystack:
+        # Patterns are normalised at config load, but this function is also
+        # called with hand-built tuples, and a stray trailing space would put
+        # the closing boundary after the space -- where the next character is
+        # almost always a word character, so nothing would ever match.
+        needle = (pattern or "").strip().lower()
+        if not needle:
+            continue
+        if re.search(r"(?<!\w)%s(?!\w)" % re.escape(needle), haystack):
             return pattern
     return None
 

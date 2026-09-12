@@ -206,19 +206,27 @@ posting bodies, and "3 Senior..." in a title is not reliably present), company s
 
 ### 9.4 `single_seat_patterns` — a new config key
 
-A list of lowercase keyword patterns, substring-matched case-insensitively against the
-title, mirroring `function_map`'s style. Shipped default, with the reasoning for each:
+A list of keyword patterns, matched case-insensitively against the title **at word
+boundaries**, normalised to stripped lowercase at load. Shipped default, with the reasoning
+for each:
 
 ```json
-"single_seat_patterns": ["founding", "head of", "director of", "chief", "principal", "vp "]
+"single_seat_patterns": ["founding", "head of", "director of", "chief", "principal", "vp"]
 ```
 
 - `founding` — "Founding X" is definitionally the first and only one.
 - `head of`, `director of`, `chief` — leadership of a function, one post per function.
 - `principal` — the top individual-contributor rung; companies open one at a time.
-- `vp ` — the trailing space is deliberate. Without it `vp` matches inside ordinary words.
-  It will miss "Sales VP" and "VP, Sales"; that miss fails *toward* SUSPECT, which is the
-  safe direction, and the list is config so it can be argued with.
+- `vp` — matches "VP Sales", "VP of Sales" and "Sales VP".
+
+**Word boundaries, not substrings, and this is load-bearing.** A plain substring scan fires
+`vp` inside "MVP Growth Engineering Lead" and `head of` inside "Analyst Ahead Of Market".
+Every such false fire lands on INVALIDATED, which throws away an account that may still be
+live. Being wrong in that direction is the failure this whole change exists to remove, so a
+pattern's first character must not be preceded by a word character and its last must not be
+followed by one. The rule also settles "SVP Sales" with no special case (`vp` is preceded by
+`s`); a workspace that wants SVP treated as one chair adds `"svp"` to config, which is where
+that judgment belongs.
 
 The list is deliberately short and conservative. Every pattern added makes the tool quicker
 to throw an account away, so the bar for adding one is "this title cannot describe two
