@@ -29,6 +29,26 @@
           "source": "team roster review"
         }
       ]
+    },
+    "Cascadia Robotics": {
+      "checked_through": "2026-09-08",
+      "hires": [
+        {
+          "function": "gtm",
+          "date": "2026-08-05",
+          "source": "team roster review"
+        }
+      ]
+    },
+    "Arbor Health": {
+      "checked_through": "2026-09-08",
+      "hires": [
+        {
+          "function": "data_eng",
+          "date": "2026-07-05",
+          "source": "team roster review"
+        }
+      ]
     }
   }
 }

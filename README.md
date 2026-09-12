@@ -30,11 +30,21 @@ the same catch, designed:
 
 ```
 [XX] Northwind Analytics — GTM Engineer (192 days old, li-9000000001)
-    INVALIDATED: No hires have been observed into this function at this company
-                 since the posting date.
+    INVALIDATED: The posting's age is below the point where an unfilled posting
+                 is more likely evergreen recruiting than a live vacancy.
+      posting is 192 days old, at or past the 180-day evergreen ceiling
+    SUSPECT: No hires have been observed into this function at this company
+             since the posting date.
       hire into gtm at Northwind Analytics on 2026-06-14 (team roster review),
-      after the posting went up on 2026-03-02
+      after the posting went up on 2026-03-02. uncorroborated-hence-suspect:
+      one hire cannot distinguish a filled seat from a team still expanding,
+      so this is counterevidence to the unfilled-role reading rather than
+      proof the vacancy is gone
 ```
+
+Read that second falsifier closely, because it is the part of this tool worth arguing with.
+The hire is real and it is recorded. It still does not prove the seat was filled. See
+[what a hire actually proves](#what-a-hire-actually-proves).
 
 ## Install
 
@@ -43,7 +53,7 @@ Nothing to install. Python 3.8 or newer, standard library only, no keys, no netw
 ```bash
 git clone https://github.com/derrtaderr/signal-drift-detector.git
 cd signal-drift-detector
-python3 tests.py          # 141 tests, no network, should print OK
+python3 tests.py          # 143 tests, no network, should print OK
 ```
 
 ## Run it against the bundled fixture
@@ -56,13 +66,13 @@ python3 -m sdd check \
 ```
 
 The fixture is synthetic, invented companies modeled on the real source shape, and it is
-calibrated to `--as-of 2026-09-10` so the output is identical on every machine. You get five
-signals covering every outcome:
+calibrated to `--as-of 2026-09-10` so the output is identical on every machine. You get
+seven signals covering every outcome, including all three ways an observed hire can land:
 
 ```
 signal drift check — 2026-09-10
 ============================================================
-2 VALID   1 SUSPECT   2 INVALIDATED   (5 signals checked)
+2 VALID   1 SUSPECT   4 INVALIDATED   (7 signals checked)
 
 INVALIDATED — A falsifier broke. Excluded from ranking and from any sequence.
 ------------------------------------------------------------
@@ -70,14 +80,37 @@ INVALIDATED — A falsifier broke. Excluded from ranking and from any sequence.
       INVALIDATED: The posting's age is below the point where an unfilled posting
                    is more likely evergreen recruiting than a live vacancy.
         posting is 192 days old, at or past the 180-day evergreen ceiling
-      INVALIDATED: No hires have been observed into this function at this company
-                   since the posting date.
+      SUSPECT: No hires have been observed into this function at this company
+               since the posting date.
         hire into gtm at Northwind Analytics on 2026-06-14 (team roster review),
-        after the posting went up on 2026-03-02
+        after the posting went up on 2026-03-02. uncorroborated-hence-suspect:
+        one hire cannot distinguish a filled seat from a team still expanding,
+        so this is counterevidence to the unfilled-role reading rather than
+        proof the vacancy is gone
 
   [XX] Tessellate Group — Head of Growth Engineering (101 days old, li-9000000004)
       INVALIDATED: The posting was still listed on the most recent source scrape.
         not seen on a scrape for 71 days, past the 45-day limit
+
+  [XX] Arbor Health — Analytics Engineer (92 days old, li-9000000007)
+      INVALIDATED: No hires have been observed into this function at this company
+                   since the posting date.
+        hire into data_eng at Arbor Health on 2026-07-05 (team roster review),
+        after the posting went up on 2026-06-10. corroborated-by-delisting: the
+        posting also stopped appearing on scrapes in this run, and a hire into
+        the function plus a listing that went away is the ordinary signature of
+        a filled seat
+      INVALIDATED: The posting was still listed on the most recent source scrape.
+        not seen on a scrape for 52 days, past the 45-day limit
+
+  [XX] Cascadia Robotics — Founding GTM Engineer (71 days old, li-9000000006)
+      INVALIDATED: No hires have been observed into this function at this company
+                   since the posting date.
+        hire into gtm at Cascadia Robotics on 2026-08-05 (team roster review),
+        after the posting went up on 2026-07-01.
+        corroborated-by-single-seat-title: 'Founding GTM Engineer' matches the
+        single-seat pattern 'founding', a title that names one chair, so the
+        hire took it
 
 SUSPECT — A falsifier is degraded or could not be checked. Held for review.
 ------------------------------------------------------------
@@ -85,7 +118,7 @@ SUSPECT — A falsifier is degraded or could not be checked. Held for review.
       SUSPECT: ... posting is 143 days old, past the 120-day evergreen warning line
       SUSPECT: ... no hire observations on record for Peregrine Labs, so nobody has looked
 
-2 of 5 signals may rank.
+2 of 7 signals may rank.
 ```
 
 ### Reading a verdict
@@ -95,7 +128,7 @@ That pairing is the point. You are meant to be able to disagree with a verdict b
 two lines, not by re-deriving the check. If you think 180 days is the wrong evergreen
 ceiling for your market, that number is in `config.json`, not in the code.
 
-Four separate things produce `SUSPECT`, and the evidence line always says which:
+Five separate things produce `SUSPECT`, and the evidence line always says which:
 
 - **no evidence source configured** — no `--evidence` file was given at all, so the hire
   check could not run. This is about the run, not about any company.
@@ -103,9 +136,50 @@ Four separate things produce `SUSPECT`, and the evidence line always says which:
 - **title does not map to a known function** — the hire check cannot be scoped, so it is
   not run rather than run against everything
 - **check raised** — the check itself failed; the exception text is in the evidence
+- **`uncorroborated-hence-suspect`** — a hire WAS found, and one hire is not enough to
+  call the seat filled. The next section is the argument.
 
 None of them can become `VALID`. The tool exists because a signal was trusted by default,
 so it never trusts anything by default itself.
+
+## What a hire actually proves
+
+You observe that a company hired a GTM engineer two months after posting a GTM role. What
+follows?
+
+Less than it looks like. The posting might have been `3 Senior GTM Engineers` — one
+posting, three chairs, two still open. The company might be scaling the function, posting
+once and hiring five times against it. In both cases the hire is real, the posting is live,
+and the account is worth keeping.
+
+A detected hire is **counterevidence to the unfilled-role reading**. It is not proof the
+vacancy is gone. v1 of this tool collapsed those two and sent any hire straight to
+`INVALIDATED`, which is a tool claiming to know more than its evidence supports — the exact
+failure it was built to catch. That was raised by an outside review of the published article
+about this build, and the argument was right.
+
+So a hire degrades the falsifier to `SUSPECT`. The signal is held for review, not ranked and
+not thrown away. It reaches `INVALIDATED` only when a second, independent observation agrees:
+
+| Path named in the evidence | What fired |
+| --- | --- |
+| `uncorroborated-hence-suspect` | A hire, nothing else. Held for review. |
+| `corroborated-by-delisting` | A hire, **and** the posting stopped appearing on scrapes. Two observations, one conclusion. |
+| `corroborated-by-single-seat-title` | A hire, **and** the title names one chair — "Founding X", "Head of X", "VP of X". Nobody hires two founding GTM engineers. |
+
+Three things this deliberately does not do:
+
+- **Count.** Three hires into a function is the *expansion* reading, not the filled one.
+  The count goes in the evidence so you can weigh it; the verdict stays `SUSPECT`.
+- **Treat a shaky listing as corroboration.** Only `INVALIDATED` on `posting_still_listed`
+  counts. Its warning band is itself an "I am not sure," and two unsure readings do not add
+  up to a sure one.
+- **Guess at headcount from the posting body.** This tool never reads posting bodies.
+
+The single-seat list is config, in `single_seat_patterns`, because it is a judgment about
+your market and you should be able to argue with it. Every pattern you add makes the tool
+quicker to throw an account away, so the bar is "this title cannot describe two chairs,"
+not "this title sounds senior."
 
 ## Run it against your own data
 
@@ -178,9 +252,9 @@ tool exists to prevent, so it is a structural distinction rather than a conventi
 
 ## Configuring falsifiers
 
-The falsifier registry, the recheck schedule, the thresholds and the title-to-function map
-all live in `config.json`. Adding a threshold, retuning a ceiling, or teaching it a new
-title family is a config edit.
+The falsifier registry, the recheck schedule, the thresholds, the title-to-function map and
+the single-seat title patterns all live in `config.json`. Adding a threshold, retuning a
+ceiling, or teaching it a new title family is a config edit.
 
 ```json
 "evergreen_age_ceiling": {
@@ -189,6 +263,19 @@ title family is a config edit.
   "thresholds": {"suspect_after_days": 120, "invalidate_after_days": 180}
 }
 ```
+
+`single_seat_patterns` is a flat list of lowercase keywords, substring-matched against the
+title:
+
+```json
+"single_seat_patterns": ["founding", "head of", "director of", "chief", "principal", "vp "]
+```
+
+The trailing space in `"vp "` is deliberate — without it, `vp` matches inside ordinary
+words. It costs the match on "Sales VP", which fails toward `SUSPECT`, the safe direction.
+Both this list and `function_map` are refused at load if a value is a bare string or an
+entry is empty, because a bare string is matched one character at a time and would make
+nearly every title match. An absent `single_seat_patterns` key means no title corroborates.
 
 Adding a genuinely new *kind* of falsifier means writing a check function in
 `sdd/checks.py` and registering it in that module's `CHECKS` table, then naming its id from
@@ -200,7 +287,7 @@ The three shipped falsifiers:
 | Falsifier | Must still be true | Breaks when |
 | --- | --- | --- |
 | `evergreen_age_ceiling` | Age is below the evergreen point. | Age crosses 120, then 180 days. |
-| `no_hires_since_posting` | No hires into this function since the posting date. | A hire into the mapped function is dated after `date_posted`. |
+| `no_hires_since_posting` | No hires into this function since the posting date. | A hire into the mapped function dated after `date_posted`, **plus** corroboration. A hire alone degrades it to `SUSPECT` — see [what a hire actually proves](#what-a-hire-actually-proves). |
 | `posting_still_listed` | The posting was on the most recent scrape. | `last_seen` falls 14, then 45 days behind. |
 
 ## Limitations, stated plainly
@@ -219,6 +306,14 @@ The three shipped falsifiers:
 - **Title-to-function mapping is keyword matching.** "Head of Growth Engineering" maps to
   `gtm` because "growth engineering" is in the list. A title nobody has taught it maps to
   nothing, and the hire check fails closed rather than guessing.
+- **Single-seat detection is keyword matching too, and it is the one place a title alone
+  can end a signal.** It will miss "Sales VP" and it will fire on a title that happens to
+  contain "principal" for an unrelated reason. Both directions are visible in the evidence
+  line, which names the pattern that matched, so a wrong call is arguable rather than
+  buried.
+- **Corroboration is a judgment, not a measurement.** "A hire plus a delisting means the
+  seat was filled" is a strong prior, not a fact. It is right more often than the v1 rule
+  it replaced, which is the honest claim available.
 - **One signal class only.** `vacancy_duration`. Positioning drift and segment-threshold
   drift are deliberately out of scope, and there is no plugin framework here.
 - **Nothing is written to your source data.** The tool reads `state.json` and writes only
@@ -227,7 +322,7 @@ The three shipped falsifiers:
 ## Repo layout
 
 ```
-config.json          falsifier registry, thresholds, schedule, function map
+config.json          falsifier registry, thresholds, schedule, function + single-seat maps
 sdd/model.py         Signal, verdict constants, worst-wins
 sdd/adapters.py      vacancy-monitor state.json -> signals
 sdd/evidence.py      hire-observation sources (file, null)
@@ -237,7 +332,7 @@ sdd/engine.py        orchestration, worst-wins, fail-closed
 sdd/report.py        human-readable rendering
 sdd/cli.py           argument parsing
 fixtures/            synthetic state + evidence, calibrated to 2026-09-10
-tests.py             141 tests, deterministic, no network
+tests.py             143 tests, deterministic, no network
 docs/SPEC.md         scope, design decisions, prior art
 .vibecodepm/         flow map and metrics definition
 ```

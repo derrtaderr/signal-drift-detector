@@ -32,7 +32,7 @@ class TestVacancyAdapter(unittest.TestCase):
 
         signals = load_vacancy_signals(SAMPLE_STATE, as_of=AS_OF)
 
-        self.assertEqual(len(signals), 5)
+        self.assertEqual(len(signals), 7)
         golden = [s for s in signals if s.signal_id == "li-9000000001"][0]
         self.assertEqual(golden.signal_class, "vacancy_duration")
         self.assertEqual(golden.company, "Northwind Analytics")
@@ -1160,11 +1160,58 @@ class TestFullRun(unittest.TestCase):
         result = self._run()
         verdicts = {v.signal_id: v.verdict for v in result.verdicts}
 
-        self.assertEqual(verdicts["li-9000000001"], INVALIDATED)  # hired into gtm
+        self.assertEqual(verdicts["li-9000000001"], INVALIDATED)  # 192 days old
         self.assertEqual(verdicts["li-9000000002"], VALID)
         self.assertEqual(verdicts["li-9000000003"], SUSPECT)  # nobody looked
         self.assertEqual(verdicts["li-9000000004"], INVALIDATED)  # scrape lost it
         self.assertEqual(verdicts["li-9000000005"], VALID)
+        self.assertEqual(verdicts["li-9000000006"], INVALIDATED)  # one-chair title
+        self.assertEqual(verdicts["li-9000000007"], INVALIDATED)  # hire + delisted
+
+    def _hire_evidence(self, result, signal_id):
+        verdict = [v for v in result.verdicts if v.signal_id == signal_id][0]
+        return {f.name: f for f in verdict.falsifiers}["no_hires_since_posting"]
+
+    def test_the_fixture_demonstrates_every_hire_path(self):
+        """A clean clone must be able to see all three outcomes in one run,
+        without writing its own data. The tool had one hire outcome before row
+        51 and the fixture showed one; now there are three."""
+        from sdd.model import INVALIDATED, SUSPECT
+
+        result = self._run()
+
+        uncorroborated = self._hire_evidence(result, "li-9000000001")
+        self.assertEqual(uncorroborated.status, SUSPECT)
+        self.assertIn("uncorroborated-hence-suspect", uncorroborated.evidence)
+
+        single_seat = self._hire_evidence(result, "li-9000000006")
+        self.assertEqual(single_seat.status, INVALIDATED)
+        self.assertIn("corroborated-by-single-seat-title", single_seat.evidence)
+
+        delisted = self._hire_evidence(result, "li-9000000007")
+        self.assertEqual(delisted.status, INVALIDATED)
+        self.assertIn("corroborated-by-delisting", delisted.evidence)
+
+    def test_the_192_day_case_survives_on_age_after_the_hire_axis_softened(self):
+        """The honest accounting of row 51, asserted rather than assumed.
+
+        The catch this tool was built from is a 192-day GTM posting at a company
+        that hired into gtm three months in. The hire no longer breaks the
+        falsifier -- "GTM Engineer" names no seat count and the listing is still
+        live -- so that axis is now SUSPECT. The signal is still INVALIDATED,
+        because 192 days is past the evergreen ceiling and worst wins. The catch
+        holds; the claim that the hire alone made it does not.
+        """
+        from sdd.model import INVALIDATED, SUSPECT
+
+        result = self._run()
+        golden = [v for v in result.verdicts if v.signal_id == "li-9000000001"][0]
+        by_name = {f.name: f for f in golden.falsifiers}
+
+        self.assertEqual(by_name["no_hires_since_posting"].status, SUSPECT)
+        self.assertEqual(by_name["evergreen_age_ceiling"].status, INVALIDATED)
+        self.assertEqual(golden.verdict, INVALIDATED)
+        self.assertFalse(golden.ranking_eligible)
 
     def test_only_valid_signals_are_ranking_eligible(self):
         result = self._run()
@@ -1178,7 +1225,8 @@ class TestFullRun(unittest.TestCase):
         result = self._run()
         self.assertEqual(result.summary[VALID], 2)
         self.assertEqual(result.summary[SUSPECT], 1)
-        self.assertEqual(result.summary[INVALIDATED], 2)
+        self.assertEqual(result.summary[INVALIDATED], 4)
+        self.assertEqual(len(result.verdicts), 7)
 
     def test_a_run_records_what_it_checked_into_the_ledger(self):
         from sdd.model import INVALIDATED
@@ -1258,7 +1306,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("2026-09-10", text)
         self.assertIn("2 VALID", text)
         self.assertIn("1 SUSPECT", text)
-        self.assertIn("2 INVALIDATED", text)
+        self.assertIn("4 INVALIDATED", text)
 
     def test_an_invalidated_signal_shows_what_broke_it(self):
         text = self._report()
@@ -1418,8 +1466,8 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["as_of"], "2026-09-10")
-        self.assertEqual(len(payload["verdicts"]), 5)
-        self.assertEqual(payload["summary"]["INVALIDATED"], 2)
+        self.assertEqual(len(payload["verdicts"]), 7)
+        self.assertEqual(payload["summary"]["INVALIDATED"], 4)
 
     def test_ranking_only_emits_just_the_eligible_ids(self):
         code, out, _ = self._main(self.base_args() + ["--ranking-only"])
@@ -1613,7 +1661,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(code, 0)
         with open(out_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
-        self.assertEqual(len(payload["verdicts"]), 5)
+        self.assertEqual(len(payload["verdicts"]), 7)
 
 
 class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
@@ -2175,7 +2223,7 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
         self.assertTrue(os.path.exists(ledger))
         self.assertTrue(os.path.exists(out_path))
         with open(out_path, "r", encoding="utf-8") as handle:
-            self.assertEqual(len(json.load(handle)["verdicts"]), 5)
+            self.assertEqual(len(json.load(handle)["verdicts"]), 7)
 
     # --- the same shape, one level up: config sections -------------------
 

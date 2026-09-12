@@ -48,5 +48,25 @@
     "first_seen": "2026-08-21",
     "reported": false,
     "last_seen": "2026-09-09"
+  },
+  "li-9000000006": {
+    "company": "Cascadia Robotics",
+    "title": "Founding GTM Engineer",
+    "date_posted": "2026-07-01",
+    "job_url": "https://example.invalid/jobs/9000000006",
+    "company_url": "https://example.invalid/company/cascadia-robotics",
+    "first_seen": "2026-07-02",
+    "reported": true,
+    "last_seen": "2026-09-09"
+  },
+  "li-9000000007": {
+    "company": "Arbor Health",
+    "title": "Analytics Engineer",
+    "date_posted": "2026-06-10",
+    "job_url": "https://example.invalid/jobs/9000000007",
+    "company_url": "https://example.invalid/company/arbor-health",
+    "first_seen": "2026-06-12",
+    "reported": true,
+    "last_seen": "2026-07-20"
   }
 }
