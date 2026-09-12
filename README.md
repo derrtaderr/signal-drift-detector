@@ -43,7 +43,7 @@ Nothing to install. Python 3.8 or newer, standard library only, no keys, no netw
 ```bash
 git clone https://github.com/derrtaderr/signal-drift-detector.git
 cd signal-drift-detector
-python3 tests.py          # 111 tests, no network, should print OK
+python3 tests.py          # 119 tests, no network, should print OK
 ```
 
 ## Run it against the bundled fixture
@@ -237,7 +237,7 @@ sdd/engine.py        orchestration, worst-wins, fail-closed
 sdd/report.py        human-readable rendering
 sdd/cli.py           argument parsing
 fixtures/            synthetic state + evidence, calibrated to 2026-09-10
-tests.py             111 tests, deterministic, no network
+tests.py             119 tests, deterministic, no network
 docs/SPEC.md         scope, design decisions, prior art
 .vibecodepm/         flow map and metrics definition
 ```

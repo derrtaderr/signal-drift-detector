@@ -34,6 +34,14 @@
       ]
     }
   },
+  "single_seat_patterns": [
+    "founding",
+    "head of",
+    "director of",
+    "chief",
+    "principal",
+    "vp "
+  ],
   "function_map": {
     "gtm": [
       "gtm",

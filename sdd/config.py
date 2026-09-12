@@ -48,6 +48,12 @@ class Config:
     falsifiers: dict
     signal_classes: dict
     function_map: dict
+    #: Title keywords that name ONE chair ("founding", "head of"). A hire into a
+    #: posting whose title matches one of these corroborates that the seat was
+    #: filled, which is what lets `no_hires_since_posting` reach INVALIDATED
+    #: rather than stopping at SUSPECT. Empty means nothing corroborates on the
+    #: title, which is the fail-closed direction.
+    single_seat_patterns: tuple = ()
     path: str = ""
 
 
@@ -205,9 +211,63 @@ def load_config(path=None):
                     )
                 )
 
+    single_seat_patterns = _load_single_seat_patterns(raw.get("single_seat_patterns"), path)
+
     return Config(
         falsifiers=falsifiers,
         signal_classes=signal_classes,
         function_map=function_map,
+        single_seat_patterns=single_seat_patterns,
         path=path,
     )
+
+
+def _load_single_seat_patterns(value, path):
+    """Validate the single-seat title patterns, or refuse naming the key.
+
+    Same failure shape as ``function_map``, one key over, and it matters more
+    here. A single-seat match is the only thing that can escalate a detected
+    hire from SUSPECT to INVALIDATED on the title alone, so a pattern that
+    matches everything makes every hire invalidate a signal -- which is exactly
+    the over-claiming behaviour this key was added to remove. It would do it
+    silently, from a config that reads as deliberately set.
+
+    An ABSENT key is an empty list: nothing corroborates on the title, every
+    uncorroborated hire lands SUSPECT. That direction is safe, so absence is
+    legal where malformation is not.
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise DriftError(
+            "single_seat_patterns must be a list of keywords in %s, got %s.%s"
+            % (
+                path,
+                type(value).__name__,
+                (
+                    " A bare string is matched one character at a time, so "
+                    "nearly every title would read as a single-seat posting and "
+                    "every observed hire would invalidate its signal."
+                    if isinstance(value, str)
+                    else ""
+                ),
+            )
+        )
+    patterns = []
+    for pattern in value:
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise DriftError(
+                "single_seat_patterns has an entry that is not a non-empty "
+                "string: %r.%s"
+                % (
+                    pattern,
+                    (
+                        " An empty pattern matches every title, so every "
+                        "observed hire would invalidate its signal."
+                        if isinstance(pattern, str)
+                        else ""
+                    ),
+                )
+            )
+        patterns.append(pattern)
+    return tuple(patterns)
