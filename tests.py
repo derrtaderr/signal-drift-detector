@@ -456,6 +456,20 @@ class TestConfig(unittest.TestCase):
         self.assertIn("evergreen", falsifier.statement.lower())
         self.assertEqual(falsifier.thresholds["invalidate_after_days"], 180)
 
+    def test_repo_config_carries_the_single_seat_patterns(self):
+        """Titles that name ONE chair. A hire into a one-chair posting is the
+        only title-side corroboration that can invalidate a signal."""
+        config = repo_config()
+
+        self.assertIn("founding", config.single_seat_patterns)
+        self.assertIn("head of", config.single_seat_patterns)
+        # Every pattern is a non-empty lowercase string. An empty one would
+        # match every title and make every hire corroborated.
+        for pattern in config.single_seat_patterns:
+            self.assertIsInstance(pattern, str)
+            self.assertTrue(pattern.strip())
+            self.assertEqual(pattern, pattern.lower())
+
     def test_repo_config_carries_the_function_map(self):
         from sdd.config import DEFAULT_CONFIG_PATH, load_config
 
@@ -1604,6 +1618,105 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
 
         self.assertIn("gtm", config.function_map)
         self.assertIn("gtm", config.function_map["gtm"])
+
+    # --- single_seat_patterns: the same validation class, one key over -----
+    #
+    # A single-seat pattern is the ONLY thing that can escalate a hire from
+    # SUSPECT to INVALIDATED on the title alone. A malformed one that matches
+    # every title therefore restores the exact pre-row-51 behaviour -- every
+    # hire invalidates -- from a config that looks configured. Same failure
+    # shape as function_map, so it gets the same refusal.
+
+    def test_single_seat_patterns_that_is_a_string_is_refused(self):
+        """A bare string is iterated CHARACTER BY CHARACTER, so "founding"
+        becomes the patterns f, o, u, n, d, i, n, g -- and 'n' is in nearly
+        every title. Every hire would then read as corroborated."""
+        config = self._config(single_seat_patterns="founding")
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "single_seat_patterns")
+
+    def test_single_seat_patterns_that_is_an_object_is_refused(self):
+        config = self._config(single_seat_patterns={"founding": True})
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "single_seat_patterns")
+
+    def test_single_seat_patterns_entry_that_is_not_a_string_is_refused(self):
+        config = self._config(single_seat_patterns=["founding", 7])
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "single_seat_patterns")
+
+    def test_single_seat_patterns_empty_entry_is_refused(self):
+        """`"" in title` is True for every title, so one empty string makes
+        every posting a single-seat posting."""
+        config = self._config(single_seat_patterns=[""])
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "single_seat_patterns")
+
+    def test_single_seat_patterns_whitespace_entry_is_refused(self):
+        config = self._config(single_seat_patterns=["   "])
+
+        code, out, err = self._main(self.base_args(config=config))
+
+        self._assert_refused(code, out, err, "single_seat_patterns")
+
+    def test_a_string_single_seat_patterns_cannot_invalidate_every_hire(self):
+        """The consequence, end to end.
+
+        "GTM Engineer" is not a single-seat title, so a lone hire must land
+        SUSPECT and the posting must be held for review rather than thrown
+        away. With `"single_seat_patterns": "founding"` the character-wise scan
+        matches on 'n', reports corroborated-by-single-seat-title, and ranks the
+        account as INVALIDATED on evidence that does not support it. The run
+        must refuse at config load instead.
+        """
+        config = self._config(single_seat_patterns="founding")
+        state = self._state(title="GTM Engineer")
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "hires": [{"function": "gtm", "date": "2026-06-14"}]
+                    }
+                }
+            },
+        )
+
+        code, out, err = self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--evidence",
+                evidence,
+                "--config",
+                config,
+                "--as-of",
+                "2026-09-10",
+            ]
+        )
+
+        self._assert_refused(code, out, err, "single_seat_patterns")
+        self.assertNotIn("single-seat", out)
+
+    def test_an_absent_single_seat_patterns_key_still_loads(self):
+        """Absence is an empty list: no title corroborates, every hire lands
+        SUSPECT. That is the fail-closed direction, so absence is legal where
+        malformation is not."""
+        from sdd.config import load_config
+
+        config_path = self._config()  # the helper writes no such key
+        config = load_config(config_path)
+
+        self.assertEqual(config.single_seat_patterns, ())
 
     # --- a refused run must not have already changed state ---------------
 
