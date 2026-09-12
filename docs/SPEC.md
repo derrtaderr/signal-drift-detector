@@ -128,7 +128,8 @@ Reproduced verbatim in effect:
 ## 7. Layout
 
 ```
-config.json            falsifier registry, signal classes, thresholds, function map
+config.json            falsifier registry, signal classes, thresholds, function map,
+                       single_seat_patterns (added row 51, see §9.4)
 sdd/model.py           Signal, Verdict, FalsifierResult, SignalVerdict
 sdd/config.py          load + validate config
 sdd/adapters.py        vacancy-monitor state.json -> [Signal]
