@@ -31,6 +31,10 @@ argument.
    against `--as-of` or today.
 4. For each signal the ledger decides due or not due. Due signals run every falsifier
    registered for their class; not-due signals carry their stored verdict forward.
+4b. Any falsifier that returned a conditional promotion has it resolved against the other
+   falsifiers' outcomes — today, only the hire falsifier, promoted when the posting also
+   went missing from scrapes. Resolved once, against the unpromoted results, so the outcome
+   never depends on the order falsifiers are listed in.
 5. Verdicts combine worst-wins per signal.
 6. The ledger is written, the report prints worst-first, and the last line says how many of
    how many may rank.
@@ -45,7 +49,7 @@ intended steady state, not a degraded one.
 | State | What the operator sees | What they do |
 | --- | --- | --- |
 | `VALID` | One line, marked `[ok]`, under "Eligible to rank." | Nothing. It flows on. |
-| `SUSPECT` | `[??]`, with the specific reason the check could not confirm. | Look, or feed better evidence. |
+| `SUSPECT` | `[??]`, with the specific reason the check could not confirm, or could not conclude. | Look, or feed better evidence. |
 | `INVALIDATED` | `[XX]`, with the falsifier statement and the evidence that broke it. | Drop the account before send. |
 | carried forward | `carried forward from <date>, inside the 7-day recheck interval` | Nothing. Use `--force` to override. |
 
@@ -69,6 +73,21 @@ which is `looked, found nothing` → VALID.
 
 **Unmappable title.** `title 'Warehouse Associate' does not map to a known function, so
 hires cannot be scoped to it` → SUSPECT. The fix is a `function_map` entry in config.
+
+**A hire was found, and nothing corroborates it.** `uncorroborated-hence-suspect` → SUSPECT.
+Not an error and not a degraded run; it is the honest reading. One hire cannot distinguish a
+filled seat from a team still expanding, so the operator sees the hire, sees the argument,
+and decides. The signal is held, never ranked and never silently dropped. It reaches
+INVALIDATED only via `corroborated-by-delisting` (the posting also left the scrapes) or
+`corroborated-by-single-seat-title` (the title names one chair). Every one of the three
+paths is named in the evidence line, so the operator can grep a run for which argument fired
+and disagree with that argument specifically.
+
+**Bad `single_seat_patterns`.** A bare string, a non-string entry, or an empty entry is a
+load-time error with exit 2, same class as `function_map`. A pattern that matches every
+title would make every observed hire corroborated, which silently restores the behaviour
+this check was changed to remove. An ABSENT key is legal and means no title corroborates,
+because that direction is fail-closed.
 
 **Unknown signal class.** A signal whose class has no registered falsifiers returns SUSPECT
 with `no falsifiers registered for signal class 'x', so its validity cannot be checked`. The
