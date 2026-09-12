@@ -213,6 +213,21 @@ FUNCTION_MAP = {
 }
 
 
+class StubEvidenceSource:
+    """An in-memory evidence source, for shapes the bundled fixture does not
+    carry (several hires into one function, say). Same interface as
+    FileEvidenceSource: absent company returns None, meaning nobody looked."""
+
+    name = "stub"
+    configured = True
+
+    def __init__(self, records):
+        self._records = records
+
+    def observations(self, company):
+        return self._records.get(company)
+
+
 class TestFunctionMapping(unittest.TestCase):
     """A hire only falsifies a posting if it lands in the SAME function. The
     map is config data, so a new title family is a config edit, not a code edit."""
@@ -238,12 +253,59 @@ class TestFunctionMapping(unittest.TestCase):
         self.assertIsNone(map_function("Warehouse Associate", FUNCTION_MAP))
 
 
+SINGLE_SEAT = ("founding", "head of", "vp ")
+
+
+class TestSingleSeatTitles(unittest.TestCase):
+    """A title that names ONE chair. Matching one is the only thing that lets a
+    lone observed hire invalidate a signal on the title alone, so the match has
+    to be conservative and it has to report WHICH pattern fired."""
+
+    def test_a_founding_title_names_one_chair(self):
+        from sdd.checks import match_single_seat
+
+        self.assertEqual(
+            match_single_seat("Founding GTM Engineer", SINGLE_SEAT), "founding"
+        )
+
+    def test_matching_is_case_insensitive(self):
+        from sdd.checks import match_single_seat
+
+        self.assertEqual(
+            match_single_seat("HEAD OF REVENUE OPERATIONS", SINGLE_SEAT), "head of"
+        )
+
+    def test_a_plain_function_title_names_no_seat_count(self):
+        """"GTM Engineer" could be one chair or five. That ambiguity is the
+        whole reason a hire against it cannot invalidate."""
+        from sdd.checks import match_single_seat
+
+        self.assertIsNone(match_single_seat("GTM Engineer", SINGLE_SEAT))
+        self.assertIsNone(
+            match_single_seat("Senior GTM Engineer (3 openings)", SINGLE_SEAT)
+        )
+
+    def test_no_patterns_configured_means_nothing_is_single_seat(self):
+        from sdd.checks import match_single_seat
+
+        self.assertIsNone(match_single_seat("Founding GTM Engineer", ()))
+
+    def test_the_vp_pattern_keeps_its_trailing_space(self):
+        """Without the space, "vp" matches inside ordinary words. With it, the
+        pattern misses "Sales VP" -- a miss that fails toward SUSPECT, which is
+        the safe direction."""
+        from sdd.checks import match_single_seat
+
+        self.assertEqual(match_single_seat("VP of Sales", SINGLE_SEAT), "vp ")
+        self.assertIsNone(match_single_seat("Sales VP", SINGLE_SEAT))
+
+
 class TestNoHiresSincePostingFalsifier(unittest.TestCase):
     """Falsifier: no hires have been observed into this function at this company
     since the posting date. This is the check that would have caught the worked
     case by design instead of by luck."""
 
-    def _run(self, signal, source=None):
+    def _run(self, signal, source=None, single_seat_patterns=SINGLE_SEAT):
         from sdd.checks import CheckContext, check_no_hires_since_posting
         from sdd.evidence import FileEvidenceSource
 
@@ -251,31 +313,129 @@ class TestNoHiresSincePostingFalsifier(unittest.TestCase):
             as_of=AS_OF,
             evidence=source if source is not None else FileEvidenceSource(SAMPLE_EVIDENCE),
             function_map=FUNCTION_MAP,
+            single_seat_patterns=single_seat_patterns,
         )
         return check_no_hires_since_posting(signal, {}, context)
 
-    def test_golden_case_hire_into_the_function_after_posting_invalidates(self):
-        from sdd.model import INVALIDATED
-
-        result = self._run(
-            make_signal(
-                company="Northwind Analytics",
-                title="GTM Engineer",
-                date_posted=date(2026, 3, 2),
-            )
+    def _golden(self, **overrides):
+        fields = dict(
+            company="Northwind Analytics",
+            title="GTM Engineer",
+            date_posted=date(2026, 3, 2),
         )
-        self.assertEqual(result.status, INVALIDATED)
+        fields.update(overrides)
+        return make_signal(**fields)
 
-    def test_invalidated_evidence_names_the_hire_date_and_function(self):
-        result = self._run(
-            make_signal(
-                company="Northwind Analytics",
-                title="GTM Engineer",
-                date_posted=date(2026, 3, 2),
-            )
-        )
+    def test_an_uncorroborated_hire_degrades_rather_than_invalidating(self):
+        """Row 51, the accepted critique. One hire cannot distinguish a filled
+        seat from a team still expanding. "GTM Engineer" names no seat count,
+        and nothing else here says the seat is gone, so the honest reading is
+        counterevidence -- SUSPECT, held for review -- not proof."""
+        from sdd.model import SUSPECT
+
+        result = self._run(self._golden())
+
+        self.assertEqual(result.status, SUSPECT)
+
+    def test_the_uncorroborated_line_names_its_path(self):
+        """An operator has to be able to grep a run for which argument fired
+        and disagree with that argument specifically."""
+        result = self._run(self._golden())
+
+        self.assertIn("uncorroborated-hence-suspect", result.evidence)
+        self.assertNotIn("corroborated-by-", result.evidence.split("uncorroborated")[0])
+
+    def test_hire_evidence_names_the_hire_date_and_function(self):
+        result = self._run(self._golden())
+
         self.assertIn("2026-06-14", result.evidence)
         self.assertIn("gtm", result.evidence)
+
+    def test_a_single_seat_title_corroborates_the_hire_and_invalidates(self):
+        """A company does not hire two founding GTM engineers. The title names
+        one chair, the hire took it, the vacancy reading is gone."""
+        from sdd.model import INVALIDATED
+
+        result = self._run(self._golden(title="Founding GTM Engineer"))
+
+        self.assertEqual(result.status, INVALIDATED)
+        self.assertIn("corroborated-by-single-seat-title", result.evidence)
+
+    def test_the_single_seat_line_names_the_pattern_that_matched(self):
+        result = self._run(self._golden(title="Founding GTM Engineer"))
+
+        self.assertIn("founding", result.evidence)
+        self.assertIn("Founding GTM Engineer", result.evidence)
+
+    def test_with_no_single_seat_patterns_even_a_founding_title_is_suspect(self):
+        """Absent config corroborates nothing. Fail-closed direction."""
+        from sdd.model import SUSPECT
+
+        result = self._run(
+            self._golden(title="Founding GTM Engineer"), single_seat_patterns=()
+        )
+
+        self.assertEqual(result.status, SUSPECT)
+        self.assertIn("uncorroborated-hence-suspect", result.evidence)
+
+    def test_several_uncorroborated_hires_are_still_suspect(self):
+        """Counting is not corroborating. Three hires into a function reads as
+        EXPANSION, which is the opposite of a filled seat; escalating past some
+        hire count would re-introduce the v1 error with a number attached."""
+        from sdd.model import SUSPECT
+
+        result = self._run(
+            self._golden(),
+            source=StubEvidenceSource(
+                {
+                    "Northwind Analytics": {
+                        "checked_through": date(2026, 9, 8),
+                        "hires": [
+                            {
+                                "function": "gtm",
+                                "date": date(2026, 6, 14),
+                                "source": "roster",
+                            },
+                            {
+                                "function": "gtm",
+                                "date": date(2026, 7, 20),
+                                "source": "roster",
+                            },
+                            {
+                                "function": "gtm",
+                                "date": date(2026, 8, 30),
+                                "source": "roster",
+                            },
+                        ],
+                    }
+                }
+            ),
+        )
+
+        self.assertEqual(result.status, SUSPECT)
+        self.assertIn("uncorroborated-hence-suspect", result.evidence)
+        # The count is reported so a human can weigh it; the tool does not.
+        self.assertIn("3 hires", result.evidence)
+        self.assertIn("2026-06-14", result.evidence)
+
+    def test_a_hire_carries_a_conditional_promotion_for_the_delisting_path(self):
+        """The check cannot see a sibling falsifier's outcome, so it hands the
+        engine a conditional instead of guessing. The engine applies it."""
+        from sdd.model import INVALIDATED
+
+        result = self._run(self._golden())
+        trigger, status, evidence = result.corroborated_by
+
+        self.assertEqual(trigger, "posting_still_listed")
+        self.assertEqual(status, INVALIDATED)
+        self.assertIn("corroborated-by-delisting", evidence)
+
+    def test_a_corroborated_hire_carries_no_further_promotion(self):
+        """Already INVALIDATED. A second escalation path would be dead weight
+        and an ordering hazard."""
+        result = self._run(self._golden(title="Founding GTM Engineer"))
+
+        self.assertEqual(result.corroborated_by, ())
 
     def test_looked_and_found_no_hires_holds(self):
         from sdd.model import VALID

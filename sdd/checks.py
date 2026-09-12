@@ -24,12 +24,22 @@ class CheckContext:
     as_of: date
     evidence: Optional[object] = None
     function_map: dict = field(default_factory=dict)
+    #: Title keywords that name ONE chair. See :func:`match_single_seat`.
+    single_seat_patterns: tuple = ()
 
 
 @dataclass(frozen=True)
 class FalsifierResult:
     status: str
     evidence: str
+    #: An optional conditional promotion, ``(trigger_check_id, status,
+    #: evidence)``. A check sees one signal and its own thresholds; it cannot
+    #: see what a sibling falsifier concluded, and handing it that view would
+    #: make the order falsifiers are listed in significant. So a check that
+    #: would reach a different verdict *if* another falsifier broke says so
+    #: here, and the engine -- which already owns combination -- applies it
+    #: after every falsifier has run. Empty means the result is final.
+    corroborated_by: tuple = ()
 
 
 def map_function(title, function_map):
@@ -46,6 +56,28 @@ def map_function(title, function_map):
         for keyword in keywords:
             if keyword.lower() in haystack:
                 return function
+    return None
+
+
+def match_single_seat(title, patterns):
+    """Return the single-seat pattern this title matches, or None.
+
+    A single-seat title names ONE chair: "Founding GTM Engineer", "Head of
+    Revenue Operations", "VP of Sales". Nobody hires two founding GTM
+    engineers, so a hire into that function fills the posting rather than
+    expanding around it. That is the one thing a title alone can corroborate.
+
+    "GTM Engineer" is NOT single-seat. It could be one chair or five, and that
+    ambiguity is exactly why a hire against it cannot invalidate a signal.
+
+    Returning the matched pattern rather than True is deliberate: the evidence
+    line names which pattern fired, so the operator can disagree with that
+    pattern specifically and edit it in config.
+    """
+    haystack = (title or "").lower()
+    for pattern in patterns or ():
+        if pattern.lower() in haystack:
+            return pattern
     return None
 
 
@@ -121,18 +153,7 @@ def check_no_hires_since_posting(signal, thresholds, context):
         if hire.get("function") == function and hire.get("date") > signal.date_posted
     ]
     if since:
-        hire = min(since, key=lambda h: h["date"])
-        return FalsifierResult(
-            INVALIDATED,
-            "hire into %s at %s on %s (%s), after the posting went up on %s"
-            % (
-                function,
-                signal.company,
-                hire["date"].isoformat(),
-                hire.get("source") or "source unrecorded",
-                signal.date_posted.isoformat(),
-            ),
-        )
+        return _report_hire(signal, function, since, context)
 
     checked_through = record.get("checked_through")
     return FalsifierResult(
@@ -147,6 +168,71 @@ def check_no_hires_since_posting(signal, thresholds, context):
                 if checked_through
                 else ""
             ),
+        ),
+    )
+
+
+def _report_hire(signal, function, since, context):
+    """Grade an observed hire. This is the epistemics of the whole tool.
+
+    A hire into the function, dated after the posting, is **counterevidence to
+    the unfilled-role reading**. It is not proof the vacancy is gone. One hire
+    cannot distinguish a seat that got filled from a team that is still
+    expanding: "3 Senior GTM Engineers" is one posting and three chairs, and a
+    company scaling a function posts once and hires five times.
+
+    v1 read any such hire as proof and went straight to INVALIDATED, which is a
+    tool claiming to know more than its evidence supports. That is the failure
+    this tool exists to catch, so it does not get to commit it.
+
+    So the hire degrades the falsifier to SUSPECT -- held for review, never
+    ranked -- and only reaches INVALIDATED when a second, independent
+    observation agrees:
+
+    * **corroborated-by-single-seat-title** -- the title names one chair, so a
+      hire into the function took it. Decided here; the title is on the signal.
+    * **corroborated-by-delisting** -- the posting also stopped appearing on
+      scrapes. Decided by the ENGINE, because a check cannot see a sibling
+      falsifier's outcome, so this result carries the conditional instead.
+
+    Counting hires is not corroborating. Three hires into a function is the
+    *expansion* reading, not the filled one; escalating past some hire count
+    would re-introduce the v1 error with an arbitrary number attached. The count
+    goes in the evidence so a human can weigh it, and the verdict stays SUSPECT.
+    """
+    earliest = min(since, key=lambda h: h["date"])
+    observed = "hire into %s at %s on %s (%s), after the posting went up on %s" % (
+        function,
+        signal.company,
+        earliest["date"].isoformat(),
+        earliest.get("source") or "source unrecorded",
+        signal.date_posted.isoformat(),
+    )
+    if len(since) > 1:
+        observed += " (%d hires into %s recorded since the posting; the earliest " \
+            "is shown, and a count is not corroboration)" % (len(since), function)
+
+    pattern = match_single_seat(signal.title, context.single_seat_patterns)
+    if pattern is not None:
+        return FalsifierResult(
+            INVALIDATED,
+            "%s. corroborated-by-single-seat-title: %r matches the single-seat "
+            "pattern %r, a title that names one chair, so the hire took it"
+            % (observed, signal.title, pattern),
+        )
+
+    return FalsifierResult(
+        SUSPECT,
+        "%s. uncorroborated-hence-suspect: one hire cannot distinguish a filled "
+        "seat from a team still expanding, so this is counterevidence to the "
+        "unfilled-role reading rather than proof the vacancy is gone" % observed,
+        corroborated_by=(
+            "posting_still_listed",
+            INVALIDATED,
+            "%s. corroborated-by-delisting: the posting also stopped appearing "
+            "on scrapes in this run, and a hire into the function plus a "
+            "listing that went away is the ordinary signature of a filled seat"
+            % observed,
         ),
     )
 
