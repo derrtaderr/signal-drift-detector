@@ -104,7 +104,10 @@ def main(argv=None, stdout=None, stderr=None):
         ledger = Ledger.load(args.ledger) if args.ledger else None
 
         context = CheckContext(
-            as_of=as_of, evidence=evidence, function_map=config.function_map
+            as_of=as_of,
+            evidence=evidence,
+            function_map=config.function_map,
+            single_seat_patterns=config.single_seat_patterns,
         )
         result = run(signals, config, context, ledger=ledger, force=args.force)
 

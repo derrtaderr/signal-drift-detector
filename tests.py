@@ -738,6 +738,7 @@ def eval_context(evidence=None):
         as_of=AS_OF,
         evidence=evidence if evidence is not None else FileEvidenceSource(SAMPLE_EVIDENCE),
         function_map=config.function_map,
+        single_seat_patterns=config.single_seat_patterns,
     )
 
 
@@ -857,6 +858,166 @@ class TestEngineVerdicts(unittest.TestCase):
         self.assertEqual(verdict.verdict, SUSPECT)
         self.assertFalse(verdict.ranking_eligible)
         self.assertIn("positioning_drift", verdict.note)
+
+
+def config_with_falsifier_order(*names):
+    """The repo config, with vacancy_duration's falsifiers in a chosen order.
+
+    Corroboration reads a sibling falsifier's outcome, so the order they run in
+    is the obvious place for an order-dependence bug to hide. These tests exist
+    to prove there is not one.
+    """
+    from sdd.config import Config, SignalClass
+
+    base = repo_config()
+    return Config(
+        falsifiers=base.falsifiers,
+        signal_classes={
+            "vacancy_duration": SignalClass(
+                name="vacancy_duration",
+                description="",
+                recheck_interval_days=7,
+                falsifiers=tuple(base.falsifiers[name] for name in names),
+            )
+        },
+        function_map=base.function_map,
+        single_seat_patterns=base.single_seat_patterns,
+    )
+
+
+class TestHireCorroboration(unittest.TestCase):
+    """Row 51. A hire degrades a signal; corroboration is what breaks it.
+
+    Worst-wins is untouched by any of this. What changed is only what the hire
+    falsifier reports about itself.
+    """
+
+    def _evaluate(self, config=None, **overrides):
+        from sdd.engine import evaluate_signal
+
+        fields = dict(
+            signal_id="li-corroborate",
+            company="Northwind Analytics",
+            title="GTM Engineer",
+            # Young enough that the age ceiling holds (101 days, under the
+            # 120-day warning line), so the age falsifier cannot do the
+            # invalidating and hide what the hire axis did. Still early enough
+            # that the fixture's 2026-06-14 gtm hire post-dates it.
+            date_posted=date(2026, 6, 1),
+            last_seen=date(2026, 9, 9),
+        )
+        fields.update(overrides)
+        return evaluate_signal(
+            make_signal(**fields),
+            config or config_with_falsifier_order(
+                "evergreen_age_ceiling",
+                "no_hires_since_posting",
+                "posting_still_listed",
+            ),
+            eval_context(),
+        )
+
+    def _hire(self, verdict):
+        return {f.name: f for f in verdict.falsifiers}["no_hires_since_posting"]
+
+    def test_a_hire_on_a_live_listing_holds_the_signal_for_review(self):
+        from sdd.model import SUSPECT
+
+        verdict = self._evaluate()
+
+        self.assertEqual(verdict.verdict, SUSPECT)
+        self.assertFalse(verdict.ranking_eligible)
+        self.assertIn("uncorroborated-hence-suspect", self._hire(verdict).evidence)
+
+    def test_a_hire_plus_a_delisted_posting_invalidates(self):
+        """Two independent observations pointing the same way. A hire into the
+        function AND a listing that stopped appearing is the ordinary signature
+        of a filled seat."""
+        from sdd.model import INVALIDATED
+
+        verdict = self._evaluate(last_seen=date(2026, 7, 1))  # 71 days missing
+
+        self.assertEqual(verdict.verdict, INVALIDATED)
+        hire = self._hire(verdict)
+        self.assertEqual(hire.status, INVALIDATED)
+        self.assertIn("corroborated-by-delisting", hire.evidence)
+        self.assertNotIn("uncorroborated", hire.evidence)
+
+    def test_a_merely_suspect_listing_does_not_corroborate(self):
+        """Only INVALIDATED on posting_still_listed corroborates. Its SUSPECT
+        band is itself an "I am not sure", and two unsure readings do not add up
+        to a sure one."""
+        from sdd.model import SUSPECT
+
+        verdict = self._evaluate(last_seen=date(2026, 8, 21))  # 20 days missing
+
+        hire = self._hire(verdict)
+        self.assertEqual(hire.status, SUSPECT)
+        self.assertIn("uncorroborated-hence-suspect", hire.evidence)
+        self.assertEqual(verdict.verdict, SUSPECT)
+
+    def test_corroboration_does_not_depend_on_falsifier_order(self):
+        """Listing the hire falsifier before or after the one that corroborates
+        it must produce the same verdict and the same evidence."""
+        from sdd.model import INVALIDATED
+
+        first = self._evaluate(
+            last_seen=date(2026, 7, 1),
+            config=config_with_falsifier_order(
+                "no_hires_since_posting", "posting_still_listed"
+            ),
+        )
+        second = self._evaluate(
+            last_seen=date(2026, 7, 1),
+            config=config_with_falsifier_order(
+                "posting_still_listed", "no_hires_since_posting"
+            ),
+        )
+
+        self.assertEqual(first.verdict, INVALIDATED)
+        self.assertEqual(second.verdict, INVALIDATED)
+        self.assertEqual(
+            self._hire(first).evidence, self._hire(second).evidence
+        )
+
+    def test_a_class_without_the_listing_falsifier_cannot_corroborate(self):
+        """No corroborator registered means nothing corroborates. The signal is
+        held, not thrown away."""
+        from sdd.model import SUSPECT
+
+        verdict = self._evaluate(
+            last_seen=date(2026, 7, 1),
+            config=config_with_falsifier_order(
+                "evergreen_age_ceiling", "no_hires_since_posting"
+            ),
+        )
+
+        self.assertEqual(verdict.verdict, SUSPECT)
+        self.assertIn("uncorroborated-hence-suspect", self._hire(verdict).evidence)
+
+    def test_a_single_seat_title_needs_no_second_observation(self):
+        from sdd.model import INVALIDATED
+
+        verdict = self._evaluate(title="Founding GTM Engineer")
+
+        self.assertEqual(verdict.verdict, INVALIDATED)
+        self.assertIn(
+            "corroborated-by-single-seat-title", self._hire(verdict).evidence
+        )
+
+    def test_a_signal_with_no_hire_is_untouched_by_any_of_this(self):
+        """Cobalt Systems was looked at and nothing was found. No hire means no
+        promotion machinery runs at all, delisted or not."""
+        from sdd.model import INVALIDATED, VALID
+
+        verdict = self._evaluate(
+            company="Cobalt Systems",
+            title="AI Engineer, Platform",
+            last_seen=date(2026, 7, 1),
+        )
+
+        self.assertEqual(self._hire(verdict).status, VALID)
+        self.assertEqual(verdict.verdict, INVALIDATED)  # delisting alone
 
 
 class TestScheduleLedger(unittest.TestCase):
@@ -1157,6 +1318,99 @@ class TestCli(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertIn("Northwind Analytics", out)
         self.assertIn("INVALIDATED", out)
+
+    def _write(self, name, obj):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(obj, handle)
+        return path
+
+    def _hire_case(self, title, last_seen="2026-09-09"):
+        """One posting, one post-dated gtm hire. Young enough that the age
+        ceiling holds, so whatever the verdict is, the hire axis produced it."""
+        state = self._write(
+            "state.json",
+            {
+                "li-1": {
+                    "company": "Northwind Analytics",
+                    "title": title,
+                    "date_posted": "2026-07-01",
+                    "last_seen": last_seen,
+                    "job_url": "https://example.invalid/jobs/1",
+                }
+            },
+        )
+        evidence = self._write(
+            "evidence.json",
+            {
+                "companies": {
+                    "Northwind Analytics": {
+                        "checked_through": "2026-09-08",
+                        "hires": [
+                            {
+                                "function": "gtm",
+                                "date": "2026-08-05",
+                                "source": "team roster review",
+                            }
+                        ],
+                    }
+                }
+            },
+        )
+        return self._main(
+            [
+                "check",
+                "--state",
+                state,
+                "--evidence",
+                evidence,
+                "--as-of",
+                "2026-09-10",
+                "--format",
+                "json",
+            ]
+        )
+
+    def _hire_falsifier(self, out):
+        payload = json.loads(out)
+        verdict = payload["verdicts"][0]
+        hire = [
+            f for f in verdict["falsifiers"] if f["name"] == "no_hires_since_posting"
+        ][0]
+        return verdict, hire
+
+    def test_a_real_run_holds_an_uncorroborated_hire_rather_than_dropping_it(self):
+        """End to end, with the repo's own config: a lone hire against a title
+        that names no seat count is SUSPECT. It does not rank, and it is not
+        thrown away either."""
+        code, out, err = self._hire_case("GTM Engineer")
+        verdict, hire = self._hire_falsifier(out)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(verdict["verdict"], "SUSPECT")
+        self.assertEqual(hire["status"], "SUSPECT")
+        self.assertIn("uncorroborated-hence-suspect", hire["evidence"])
+
+    def test_a_real_run_invalidates_a_hire_into_a_single_seat_title(self):
+        """Proves the repo config's single_seat_patterns actually reach the
+        check. Wired only at one end, this test is the one that notices."""
+        code, out, err = self._hire_case("Founding GTM Engineer")
+        verdict, hire = self._hire_falsifier(out)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(verdict["verdict"], "INVALIDATED")
+        self.assertEqual(hire["status"], "INVALIDATED")
+        self.assertIn("corroborated-by-single-seat-title", hire["evidence"])
+        self.assertIn("founding", hire["evidence"])
+
+    def test_a_real_run_invalidates_a_hire_into_a_delisted_posting(self):
+        code, out, err = self._hire_case("GTM Engineer", last_seen="2026-07-05")
+        verdict, hire = self._hire_falsifier(out)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(verdict["verdict"], "INVALIDATED")
+        self.assertEqual(hire["status"], "INVALIDATED")
+        self.assertIn("corroborated-by-delisting", hire["evidence"])
 
     def test_json_format_emits_machine_readable_verdicts(self):
         code, out, _ = self._main(self.base_args() + ["--format", "json"])
