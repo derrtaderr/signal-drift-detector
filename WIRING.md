@@ -1,91 +1,13 @@
 # Wiring
 
-> **APPLIED 2026-09-10.** Both edits below landed (Jason's yes on card #359, path 1): /weekly
-> Step 0.8 runs the drift check on every pass (command adapted to run from the vault root,
-> verified live, exit 0 over 257 signals), and the vacancy-monitor README improvement queue
-> points here. `<CLONE>` resolved to `builds/signal-drift-detector`. Evidence exists:
-> `hires.json` (real, hand-researched 2026-09-10, gitignored) + `evidence-notes-2026-09-10.md`.
-> The text below is preserved as the proposal record.
-
-This lane wrote nothing outside its own worktree. The edits below are proposals for the
-orchestrator to apply at merge, given as exact old→new strings against files in the vault.
-
-**All of it is blocked on one decision that is Jason's, not mine:** where this repo gets
-cloned on his machine, and whether the drift check should run at all before he has an
-evidence file to feed it. Today, with no evidence file, a real run marks 254 of 257 signals
-SUSPECT (see `.vibecodepm/metrics.md`). That is correct behavior and probably useless as a
-weekly report until hire evidence exists. **My recommendation is to apply edit 2 only, and
-hold edit 1 until there is an evidence file.** Both are written out so the choice is his.
-
-Throughout, `<CLONE>` stands for the chosen clone path.
-
----
-
-## Edit 1 — `/weekly` Step 0.8, gate crossings before they spend Clay credits
-
-**Rationale.** Step 0.8 already produces crossings and routes them to c1-spec enrichment,
-which Step 0.8's own text notes "spends Clay credits, so it is Jason's yes." A crossing that
-is a dead signal spends those credits for nothing. The drift check runs on the same
-`state.json` the monitor just wrote, costs nothing, and needs no network.
-
-File: `.claude/commands/weekly.md`
-
-OLD (one line, at the end of Step 0.8's bullet list):
-
-```
-- If the scrape fails (LinkedIn rate limit), note it and move on; it self-heals next week.
-```
-
-NEW:
-
-```
-- If the scrape fails (LinkedIn rate limit), note it and move on; it self-heals next week.
-
-**Then drift-check the crossings before proposing enrichment (added 2026-09-10).** Run
-`python3 -m sdd check --state builds/vacancy-monitor/state.json --evidence <CLONE>/hires.json --ledger <CLONE>/ledger.json`
-from `<CLONE>` (free, no network, ~1s). A duration signal's score only climbs with age, so
-nothing in the monitor asks whether the vacancy is still real. Any crossing that comes back
-INVALIDATED does not go into the retro as an enrichment proposal; name it in one line with
-the falsifier that broke it. SUSPECT crossings still go in, flagged, because SUSPECT means
-nobody checked rather than the signal being dead. Precedent: on 2026-09-09 a GTM role open
-192 days sat top of the sourcing list until someone noticed by accident that the company had
-hired into that function months earlier.
-```
-
----
-
-## Edit 2 — vacancy-monitor README, record that the validity layer now exists
-
-**Rationale.** The README's improvement queue is where a future session looks. Right now
-nothing in vacancy-monitor points at the fact that a falsifier layer for its own signal
-exists, which is the "an artifact with no reader is not an artifact" failure from the root
-CLAUDE.md.
-
-File: `builds/vacancy-monitor/README.md`
-
-OLD:
-
-```
-## Improvement queue (proposed, not built)
-
-- **Wire departures chain into /weekly** once hop 2 validates live.
-```
-
-NEW:
-
-```
-## Improvement queue (proposed, not built)
-
-- **Wire departures chain into /weekly** once hop 2 validates live.
-- **Drift-check crossings before enrichment** — `signal-drift-detector` (build-queue row 45,
-  2026-09-10) reads this repo's `state.json` and re-checks the falsifiers under each
-  duration signal: age past an evergreen ceiling, hires observed into the function since the
-  posting date, posting missing from recent scrapes. Blocked on hire evidence, which it
-  consumes from a file and does not gather. Without that file every signal fails closed to
-  SUSPECT, so wiring it into /weekly Step 0.8 waits until the file exists.
-```
-
----
+This tool is consumed by a private operations repo. The integration below was designed as
+exact old-to-new file edits, proposed by the build lane without touching anything outside its
+own worktree, reviewed, and **applied 2026-09-10** by the orchestrating session: a weekly
+sourcing pass now runs the drift check over the tracked-postings state file before any
+crossing can propose paid enrichment, and the signal source's docs point back here. The
+verbatim edit text lived in this file's history and was trimmed when the repo went public,
+since it quoted a private repo's internals; the design reasoning below is kept because it is
+the useful part.
 
 ## Not proposed, and why
 
