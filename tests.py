@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import re
 import unittest
 from datetime import date
 
@@ -1713,6 +1714,26 @@ class TestCleanCloneUsability(unittest.TestCase):
                     offenders.append(path)
         self.assertEqual(offenders, [])
 
+
+
+
+class ReadmeFreshnessTest(unittest.TestCase):
+    """The README's stated test count must equal the live suite. This artifact's
+    own thesis is that stated numbers drift from the facts beneath them; the
+    readme_test_count check is that thesis applied to the repo itself. When you
+    add a test, the README's counts change in the SAME commit or this goes red."""
+
+    def test_readme_test_count_matches_the_suite(self):
+        import sys
+        loader = unittest.TestLoader()
+        live = loader.loadTestsFromModule(sys.modules[__name__]).countTestCases()
+        readme = open(os.path.join(os.path.dirname(__file__), "README.md")).read()
+        stated = re.findall(r"(?<!\w)(\d+) tests", readme)
+        self.assertTrue(stated, "README no longer states a test count anywhere")
+        for n in stated:
+            self.assertEqual(int(n), live,
+                f"README says {n} tests; the suite runs {live}. Same-commit rule: "
+                f"update every count in README.md in the commit that changed the suite.")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
