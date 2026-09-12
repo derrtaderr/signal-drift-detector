@@ -253,7 +253,7 @@ class TestFunctionMapping(unittest.TestCase):
         self.assertIsNone(map_function("Warehouse Associate", FUNCTION_MAP))
 
 
-SINGLE_SEAT = ("founding", "head of", "vp ")
+SINGLE_SEAT = ("founding", "head of", "vp")
 
 
 class TestSingleSeatTitles(unittest.TestCase):
@@ -290,14 +290,43 @@ class TestSingleSeatTitles(unittest.TestCase):
 
         self.assertIsNone(match_single_seat("Founding GTM Engineer", ()))
 
-    def test_the_vp_pattern_keeps_its_trailing_space(self):
-        """Without the space, "vp" matches inside ordinary words. With it, the
-        pattern misses "Sales VP" -- a miss that fails toward SUSPECT, which is
-        the safe direction."""
+    def test_a_pattern_matches_only_at_word_boundaries(self):
+        """The trap class, live. A substring scan fires "vp" inside "MVP" and
+        "head of" inside "ahead of", and every one of those false fires lands on
+        INVALIDATED -- the direction that throws a possibly-live account away.
+        A match has to be the whole word."""
         from sdd.checks import match_single_seat
 
-        self.assertEqual(match_single_seat("VP of Sales", SINGLE_SEAT), "vp ")
-        self.assertIsNone(match_single_seat("Sales VP", SINGLE_SEAT))
+        self.assertIsNone(
+            match_single_seat("MVP Growth Engineering Lead", SINGLE_SEAT)
+        )
+        self.assertIsNone(
+            match_single_seat("Revenue Operations Analyst Ahead Of Market", SINGLE_SEAT)
+        )
+
+    def test_the_boundary_rule_does_not_cost_the_real_matches(self):
+        from sdd.checks import match_single_seat
+
+        self.assertEqual(match_single_seat("VP Sales", SINGLE_SEAT), "vp")
+        self.assertEqual(match_single_seat("VP of Sales", SINGLE_SEAT), "vp")
+        self.assertEqual(match_single_seat("Head of Growth", SINGLE_SEAT), "head of")
+        self.assertEqual(match_single_seat("Sales VP", SINGLE_SEAT), "vp")
+
+    def test_svp_is_not_vp(self):
+        """Falls out of the boundary rule rather than being special-cased. A
+        workspace that wants SVP treated as one chair adds "svp" to config."""
+        from sdd.checks import match_single_seat
+
+        self.assertIsNone(match_single_seat("SVP Sales", SINGLE_SEAT))
+        self.assertEqual(match_single_seat("SVP Sales", ("svp",)), "svp")
+
+    def test_a_multi_word_pattern_is_bounded_at_both_ends(self):
+        from sdd.checks import match_single_seat
+
+        self.assertEqual(
+            match_single_seat("Head of Revenue Operations", SINGLE_SEAT), "head of"
+        )
+        self.assertIsNone(match_single_seat("Bulkhead often reviewed", SINGLE_SEAT))
 
 
 class TestNoHiresSincePostingFalsifier(unittest.TestCase):
@@ -1450,6 +1479,37 @@ class TestCli(unittest.TestCase):
         self.assertEqual(hire["status"], "INVALIDATED")
         self.assertIn("corroborated-by-single-seat-title", hire["evidence"])
         self.assertIn("founding", hire["evidence"])
+
+    def test_a_real_run_does_not_read_mvp_as_a_vp_posting(self):
+        """The trap class end to end, against the repo's own config. A false
+        single-seat match lands on INVALIDATED, which discards a possibly-live
+        account -- the expensive direction to be wrong in."""
+        code, out, err = self._hire_case("MVP Growth Engineering Lead")
+        verdict, hire = self._hire_falsifier(out)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(verdict["verdict"], "SUSPECT")
+        self.assertIn("uncorroborated-hence-suspect", hire["evidence"])
+        self.assertNotIn("single-seat", hire["evidence"])
+
+    def test_a_real_run_does_not_read_ahead_of_as_head_of(self):
+        code, out, err = self._hire_case(
+            "Revenue Operations Analyst Ahead Of Market"
+        )
+        verdict, hire = self._hire_falsifier(out)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(verdict["verdict"], "SUSPECT")
+        self.assertIn("uncorroborated-hence-suspect", hire["evidence"])
+
+    def test_a_real_run_still_reads_a_vp_posting_as_one_chair(self):
+        code, out, err = self._hire_case("VP of Growth Engineering")
+        verdict, hire = self._hire_falsifier(out)
+
+        self.assertEqual(code, 0, err)
+        self.assertEqual(verdict["verdict"], "INVALIDATED")
+        self.assertIn("corroborated-by-single-seat-title", hire["evidence"])
+        self.assertIn("'vp'", hire["evidence"])
 
     def test_a_real_run_invalidates_a_hire_into_a_delisted_posting(self):
         code, out, err = self._hire_case("GTM Engineer", last_seen="2026-07-05")
