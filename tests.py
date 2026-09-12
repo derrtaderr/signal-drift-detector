@@ -652,12 +652,13 @@ class TestConfig(unittest.TestCase):
 
         self.assertIn("founding", config.single_seat_patterns)
         self.assertIn("head of", config.single_seat_patterns)
-        # Every pattern is a non-empty lowercase string. An empty one would
-        # match every title and make every hire corroborated.
+        # Every pattern is a non-empty string, already stripped and lowercased
+        # by the loader. An empty one would match every title and make every
+        # hire corroborated, which the loader refuses outright.
         for pattern in config.single_seat_patterns:
             self.assertIsInstance(pattern, str)
-            self.assertTrue(pattern.strip())
-            self.assertEqual(pattern, pattern.lower())
+            self.assertTrue(pattern)
+            self.assertEqual(pattern, pattern.strip().lower())
 
     def test_repo_config_carries_the_function_map(self):
         from sdd.config import DEFAULT_CONFIG_PATH, load_config
@@ -2228,6 +2229,36 @@ class TestRefusesBadInputWithoutATraceback(unittest.TestCase):
 
         self._assert_refused(code, out, err, "single_seat_patterns")
         self.assertNotIn("single-seat", out)
+
+    def test_single_seat_patterns_are_normalized_at_load(self):
+        """Stripped and lowercased by the loader, not by convention.
+
+        Matching lowercases anyway, so this is not what makes "Founding" work.
+        What it buys is that the stored value IS the matched value, so the
+        pattern quoted back in an evidence line is the one the matcher used, and
+        a stray trailing space cannot reach the boundary rule and silently stop
+        a pattern matching anything.
+        """
+        from sdd.config import load_config
+
+        config = load_config(
+            self._config(single_seat_patterns=["  Founding ", "HEAD OF", "VP"])
+        )
+
+        self.assertEqual(config.single_seat_patterns, ("founding", "head of", "vp"))
+
+    def test_a_padded_pattern_still_matches_after_normalization(self):
+        """The end-to-end consequence. Before normalization, "vp " put the
+        closing boundary after the space, where the next character is almost
+        always a word character -- so the pattern matched nothing at all."""
+        from sdd.checks import match_single_seat
+        from sdd.config import load_config
+
+        config = load_config(self._config(single_seat_patterns=["vp "]))
+
+        self.assertEqual(
+            match_single_seat("VP of Sales", config.single_seat_patterns), "vp"
+        )
 
     def test_an_absent_single_seat_patterns_key_still_loads(self):
         """Absence is an empty list: no title corroborates, every hire lands

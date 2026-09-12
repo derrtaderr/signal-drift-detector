@@ -235,6 +235,14 @@ def _load_single_seat_patterns(value, path):
     An ABSENT key is an empty list: nothing corroborates on the title, every
     uncorroborated hire lands SUSPECT. That direction is safe, so absence is
     legal where malformation is not.
+
+    Accepted patterns are normalised to stripped lowercase here. Matching
+    lowercases anyway, so this is not what makes ``"Founding"`` work. What it
+    buys is that the stored value IS the matched value: the pattern quoted back
+    in an evidence line is the one the matcher used, and a stray trailing space
+    cannot survive to meet the word-boundary rule, where it would put the
+    closing boundary after the space and silently stop the pattern matching
+    anything at all.
     """
     if value is None:
         return ()
@@ -269,5 +277,5 @@ def _load_single_seat_patterns(value, path):
                     ),
                 )
             )
-        patterns.append(pattern)
+        patterns.append(pattern.strip().lower())
     return tuple(patterns)
